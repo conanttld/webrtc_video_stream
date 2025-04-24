@@ -1,17 +1,23 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
+import * as bodyPix from '@tensorflow-models/body-pix';
+import * as tf from '@tensorflow/tfjs';
 import './App.css';
 
 function App() {
   const [fps, setFps] = useState(0);
   const [isBroadcasting, setIsBroadcasting] = useState(false);
   const [isViewing, setIsViewing] = useState(false);
-  const [applyBlur, setApplyBlur] = useState(false); // <-- Add state for blur
+  const [applyBlur, setApplyBlur] = useState(false);
+  const [isSegmentationReady, setIsSegmentationReady] = useState(false);
   const videoRef = useRef(null);
+  const canvasRef = useRef(null);
   const wsRef = useRef(null);
   const pcRef = useRef(null);
   const localStreamRef = useRef(null);
-  const rafRef = useRef(null); // For requestAnimationFrame ID
-  const fpsStateRef = useRef({ // Ref to hold latest state for FPS calculation
+  const rafRef = useRef(null);
+  const segmentationRafRef = useRef(null);
+  const bodyPixModelRef = useRef(null);
+  const fpsStateRef = useRef({
     frameCount: 0,
     lastFrameTime: 0,
     lastFrameReceivedTime: 0,
@@ -20,21 +26,180 @@ function App() {
     myId: null
   });
 
-  // Ensure state updates in ref for access in callbacks/loops
+  // --- Initialize BodyPix Model ---
   useEffect(() => {
-    fpsStateRef.current.streamActive = isBroadcasting || isViewing;
-  }, [isBroadcasting, isViewing]);
+    let isMounted = true;
 
-  // --- Apply/Remove Blur Effect ---
+    const loadBodyPixModel = async () => {
+      try {
+        console.log("Loading BodyPix model...");
+        // Set backend to WebGL for better performance
+        await tf.setBackend('webgl');
+        // Load the model with slightly lower resolution for better performance
+        const model = await bodyPix.load({
+          architecture: 'MobileNetV1',
+          outputStride: 16,
+          multiplier: 0.75,
+          quantBytes: 2
+        });
+        
+        if (isMounted) {
+          bodyPixModelRef.current = model;
+          setIsSegmentationReady(true);
+          console.log("BodyPix model loaded and ready");
+        }
+      } catch (error) {
+        console.error("Failed to load BodyPix model:", error);
+        if (isMounted) {
+          setIsSegmentationReady(false);
+        }
+      }
+    };
+
+    loadBodyPixModel();
+
+    return () => {
+      isMounted = false;
+      // TensorFlow.js handles cleanup of its own resources
+      setIsSegmentationReady(false);
+      console.log("Cleaning up BodyPix model");
+    };
+  }, []);
+
+  // --- Segmentation Processing Loop ---
+  const segmentationLoop = useCallback(() => {
+    if (!bodyPixModelRef.current || !videoRef.current || !canvasRef.current) {
+      segmentationRafRef.current = requestAnimationFrame(segmentationLoop);
+      return;
+    }
+
+    // Ensure video has data
+    if (videoRef.current.readyState < 2) {
+      segmentationRafRef.current = requestAnimationFrame(segmentationLoop);
+      return;
+    }
+
+    const processSegmentation = async () => {
+      try {
+        // Segment the person from the video
+        const segmentation = await bodyPixModelRef.current.segmentPerson(videoRef.current, {
+          flipHorizontal: false,
+          internalResolution: 'medium',
+          segmentationThreshold: 0.7
+        });
+
+        // Get canvas context and make sure dimensions match video
+        const ctx = canvasRef.current.getContext('2d');
+        const videoWidth = videoRef.current.videoWidth;
+        const videoHeight = videoRef.current.videoHeight;
+        
+        if (canvasRef.current.width !== videoWidth || canvasRef.current.height !== videoHeight) {
+          canvasRef.current.width = videoWidth;
+          canvasRef.current.height = videoHeight;
+        }
+
+        // Draw original video to canvas first
+        ctx.drawImage(videoRef.current, 0, 0, videoWidth, videoHeight);
+        
+        // Get the original frame as ImageData
+        const originalFrame = ctx.getImageData(0, 0, videoWidth, videoHeight);
+        
+        // Create a blurred version using a temporary canvas
+        const tempCanvas = document.createElement('canvas');
+        tempCanvas.width = videoWidth;
+        tempCanvas.height = videoHeight;
+        const tempCtx = tempCanvas.getContext('2d');
+        tempCtx.drawImage(videoRef.current, 0, 0, videoWidth, videoHeight);
+        tempCtx.filter = 'blur(8px)';
+        tempCtx.drawImage(tempCanvas, 0, 0, videoWidth, videoHeight);
+        
+        // Get the blurred frame
+        const blurredFrame = tempCtx.getImageData(0, 0, videoWidth, videoHeight);
+        
+        // Create final composite frame
+        const compositeFrame = new ImageData(
+          new Uint8ClampedArray(originalFrame.data),
+          videoWidth,
+          videoHeight
+        );
+        
+        // Replace background pixels with blurred pixels
+        for (let i = 0; i < segmentation.data.length; i++) {
+          // If pixel is not part of person (0), use the blurred pixel
+          if (segmentation.data[i] === 0) {
+            const pixelIndex = i * 4;
+            compositeFrame.data[pixelIndex] = blurredFrame.data[pixelIndex];         // R
+            compositeFrame.data[pixelIndex + 1] = blurredFrame.data[pixelIndex + 1]; // G
+            compositeFrame.data[pixelIndex + 2] = blurredFrame.data[pixelIndex + 2]; // B
+            // Keep original alpha
+          }
+        }
+        
+        // Put the composite frame back to the main canvas
+        ctx.putImageData(compositeFrame, 0, 0);
+        
+      } catch (error) {
+        console.error("Error in segmentation processing:", error);
+      }
+
+      // Continue loop
+      segmentationRafRef.current = requestAnimationFrame(segmentationLoop);
+    };
+
+    processSegmentation();
+  }, []);
+
+  // --- Apply/Remove Blur Effect (controls segmentation) ---
   useEffect(() => {
-    if (videoRef.current) {
-      if (isViewing && applyBlur) {
-        videoRef.current.classList.add('blur-background');
-      } else {
-        videoRef.current.classList.remove('blur-background');
+    const videoElement = videoRef.current;
+    const canvasElement = canvasRef.current;
+
+    if (!videoElement || !canvasElement) return;
+
+    if (isViewing && applyBlur && isSegmentationReady) {
+      console.log("Showing processed stream with background blur...");
+      // Hide original video, show processed canvas
+      videoElement.classList.add('hidden');
+      canvasElement.classList.remove('hidden');
+
+      // Start the segmentation loop
+      if (segmentationRafRef.current) {
+        cancelAnimationFrame(segmentationRafRef.current);
+      }
+      segmentationRafRef.current = requestAnimationFrame(segmentationLoop);
+
+    } else {
+      // Stop the segmentation loop if running
+      if (segmentationRafRef.current) {
+        console.log("Stopping segmentation processing.");
+        cancelAnimationFrame(segmentationRafRef.current);
+        segmentationRafRef.current = null;
+      }
+      
+      // Show original video stream
+      console.log("Showing original video stream...");
+      videoElement.classList.remove('hidden');
+      canvasElement.classList.add('hidden');
+      
+      // Clear canvas when hidden
+      const canvasCtx = canvasElement.getContext('2d');
+      if (canvasCtx) {
+        canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
       }
     }
-  }, [isViewing, applyBlur]); // Re-run when viewing state or blur state changes
+
+    // Cleanup function
+    return () => {
+      if (segmentationRafRef.current) {
+        cancelAnimationFrame(segmentationRafRef.current);
+        segmentationRafRef.current = null;
+      }
+      if (videoElement && canvasElement) {
+        videoElement.classList.remove('hidden');
+        canvasElement.classList.add('hidden');
+      }
+    };
+  }, [isViewing, applyBlur, isSegmentationReady, segmentationLoop]);
 
   // --- WebSocket Connection and Handling ---
   useEffect(() => {
@@ -316,7 +481,13 @@ function App() {
     setIsBroadcasting(false);
     setIsViewing(false);
     setFps(0);
-    setApplyBlur(false); // Reset blur on stop
+    setApplyBlur(false);
+
+    // Stop segmentation loop explicitly if running
+    if (segmentationRafRef.current) {
+      cancelAnimationFrame(segmentationRafRef.current);
+      segmentationRafRef.current = null;
+    }
 
     // Cancel FPS calculation loop
     if (rafRef.current) {
@@ -342,19 +513,26 @@ function App() {
       pcRef.current = null;
     }
 
-    // Clear video display
+    // Clear video display and ensure canvas is hidden
     if (videoRef.current) {
       videoRef.current.srcObject = null;
-      videoRef.current.classList.remove('blur-background'); // Ensure class is removed
+      videoRef.current.classList.remove('hidden');
+    }
+    if (canvasRef.current) {
+      canvasRef.current.classList.add('hidden');
+      const canvasCtx = canvasRef.current.getContext('2d');
+      if (canvasCtx) {
+        canvasCtx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+      }
     }
 
     console.log("Stream stopped and resources cleaned up.");
-  }, [isBroadcasting, sendMessage]); // Dependencies
+  }, [isBroadcasting, sendMessage]);
 
   // --- Render ---
   return (
     <div className="App">
-      <h1>WebRTC Webcam Stream</h1>
+      <h1>WebRTC Webcam Stream with BodyPix Segmentation</h1>
       <div className="controls">
         <button onClick={startBroadcasting} disabled={isBroadcasting || isViewing}>
           Start Broadcasting
@@ -375,14 +553,14 @@ function App() {
                 checked={applyBlur}
                 onChange={(e) => setApplyBlur(e.target.checked)}
               />
-              Apply Background Blur
+              Apply Background Blur (BodyPix)
             </label>
           </div>
         )}
       </div>
       <div className="video-container">
         <video ref={videoRef} id="video" autoPlay playsInline muted={isBroadcasting}></video>
-        {/* Mute if broadcasting to prevent echo, unmute if viewing */}
+        <canvas ref={canvasRef} id="canvas" className="hidden"></canvas>
       </div>
       <div id="fps-display">FPS: {fps}</div>
     </div>

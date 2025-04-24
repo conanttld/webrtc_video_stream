@@ -44,19 +44,31 @@
   margin: 20px auto;
   border: 1px solid #ccc;
   background-color: #000;
+  overflow: hidden; /* Hide overflow */
 }
 
-#video {
+#video, #canvas {
   display: block;
   width: 100%;
   height: 100%;
   object-fit: cover; /* Cover the container, might crop */
   transition: filter 0.3s ease-in-out; /* Smooth transition for blur */
+  position: absolute; /* Position absolutely within container */
+  top: 0;
+  left: 0;
 }
 
-#video.blur-background {
-  filter: blur(8px); /* Adjust blur amount as needed */
+/* Add proper hidden class */
+.hidden {
+  display: none !important; /* Use important to ensure it overrides other display properties */
 }
+
+/* Remove or comment out this as we're using the canvas for blur now */
+/*
+#video.blur-background {
+  filter: blur(8px);
+}
+*/
 
 .controls {
   margin-bottom: 15px;
