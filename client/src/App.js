@@ -5,6 +5,7 @@ function App() {
   const [fps, setFps] = useState(0);
   const [isBroadcasting, setIsBroadcasting] = useState(false);
   const [isViewing, setIsViewing] = useState(false);
+  const [applyBlur, setApplyBlur] = useState(false); // <-- Add state for blur
   const videoRef = useRef(null);
   const wsRef = useRef(null);
   const pcRef = useRef(null);
@@ -23,6 +24,17 @@ function App() {
   useEffect(() => {
     fpsStateRef.current.streamActive = isBroadcasting || isViewing;
   }, [isBroadcasting, isViewing]);
+
+  // --- Apply/Remove Blur Effect ---
+  useEffect(() => {
+    if (videoRef.current) {
+      if (isViewing && applyBlur) {
+        videoRef.current.classList.add('blur-background');
+      } else {
+        videoRef.current.classList.remove('blur-background');
+      }
+    }
+  }, [isViewing, applyBlur]); // Re-run when viewing state or blur state changes
 
   // --- WebSocket Connection and Handling ---
   useEffect(() => {
@@ -304,6 +316,7 @@ function App() {
     setIsBroadcasting(false);
     setIsViewing(false);
     setFps(0);
+    setApplyBlur(false); // Reset blur on stop
 
     // Cancel FPS calculation loop
     if (rafRef.current) {
@@ -332,6 +345,7 @@ function App() {
     // Clear video display
     if (videoRef.current) {
       videoRef.current.srcObject = null;
+      videoRef.current.classList.remove('blur-background'); // Ensure class is removed
     }
 
     console.log("Stream stopped and resources cleaned up.");
@@ -348,14 +362,27 @@ function App() {
         <button onClick={startViewing} disabled={isBroadcasting || isViewing}>
           Start Viewing
         </button>
-        {/* Show stop button only when broadcasting or viewing */} 
+        {/* Show stop button only when broadcasting or viewing */}
         {(isBroadcasting || isViewing) && (
           <button onClick={stopStreaming}>Stop</button>
+        )}
+        {/* Add Checkbox for Blur - only show when viewing */}
+        {isViewing && (
+          <div className="blur-control">
+            <label>
+              <input
+                type="checkbox"
+                checked={applyBlur}
+                onChange={(e) => setApplyBlur(e.target.checked)}
+              />
+              Apply Background Blur
+            </label>
+          </div>
         )}
       </div>
       <div className="video-container">
         <video ref={videoRef} id="video" autoPlay playsInline muted={isBroadcasting}></video>
-        {/* Mute if broadcasting to prevent echo, unmute if viewing */} 
+        {/* Mute if broadcasting to prevent echo, unmute if viewing */}
       </div>
       <div id="fps-display">FPS: {fps}</div>
     </div>
