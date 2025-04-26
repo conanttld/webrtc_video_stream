@@ -2,6 +2,7 @@ import React, { useRef, useEffect, useCallback } from 'react';
 import useUIState from './services/uiStateService';
 import useFPSMonitor from './services/fpsMonitorService';
 import useBodyPixSegmentation from './services/bodyPixService';
+import useWebRTCConnection from './services/webrtcService';
 import './App.css';
 
 function App() {
@@ -23,6 +24,12 @@ function App() {
     stopStreaming: uiStopStreaming
   } = useUIState();
 
+  // Refs for DOM elements and other utilities
+  const videoRef = useRef(null);
+  const canvasRef = useRef(null);
+  const wsRef = useRef(null);
+  const wsRetryTimeoutRef = useRef(null);
+
   // Use the FPS Monitoring Service
   const {
     startMonitoring,
@@ -38,30 +45,6 @@ function App() {
     startBackgroundBlur,
     stopBackgroundBlur
   } = useBodyPixSegmentation(setIsSegmentationReady);
-
-  // Refs that were previously defined in App component
-  const videoRef = useRef(null);
-  const canvasRef = useRef(null);
-  const wsRef = useRef(null);
-  const pcRef = useRef(null);
-  const localStreamRef = useRef(null);
-  const wsRetryTimeoutRef = useRef(null);
-
-  // Create a refs object to pass to the UI state service
-  const refs = {
-    videoRef,
-    canvasRef,
-    wsRef,
-    pcRef,
-    localStreamRef,
-    rafRef,
-    segmentationRafRef
-  };
-
-  // Create a state object to pass to the UI state service
-  const state = {
-    fpsStateRef
-  };
 
   // --- Helper to send WebSocket messages ---
   const sendMessage = useCallback((message) => {
@@ -88,84 +71,41 @@ function App() {
     }
   }, []);
 
+  // Use the WebRTC Connection Service
+  const {
+    pcRef,
+    localStreamRef,
+    createPeerConnection,
+    createAndSendOffer,
+    handleReceivedOffer,
+    handleReceivedAnswer,
+    handleReceivedCandidate,
+    cleanupConnection
+  } = useWebRTCConnection(sendMessage, fpsStateRef, startMonitoring);
+
+  // Create a refs object to pass to services
+  const refs = {
+    videoRef,
+    canvasRef,
+    wsRef,
+    pcRef,
+    localStreamRef,
+    rafRef,
+    segmentationRafRef
+  };
+
+  // Create a state object to pass to services
+  const state = {
+    fpsStateRef
+  };
+
   // Define stopStreaming before it's used in createPeerConnection
   const stopStreaming = useCallback(() => {
     stopMonitoring(); // Stop FPS monitoring
     stopBackgroundBlur(videoRef, canvasRef); // Stop background blur
+    cleanupConnection(); // Clean up WebRTC connection
     uiStopStreaming(sendMessage, refs, state);
-  }, [uiStopStreaming, sendMessage, refs, state, stopMonitoring, stopBackgroundBlur]);
-
-  // --- Peer Connection Setup ---
-  const createPeerConnection = useCallback(async (isBroadcaster) => {
-    if (pcRef.current) {
-      console.log("Closing existing PeerConnection");
-      pcRef.current.close();
-    }
-    console.log("Creating new PeerConnection. isBroadcaster:", isBroadcaster);
-    pcRef.current = new RTCPeerConnection();
-
-    pcRef.current.onicecandidate = ({ candidate }) => {
-      if (candidate && fpsStateRef.current.myId) { // Ensure we have a target ID
-        console.log("Sending ICE candidate to:", fpsStateRef.current.myId);
-        sendMessage({ type: 'candidate', candidate, target: fpsStateRef.current.myId });
-      } else if (candidate) {
-          console.warn("No target ID found for ICE candidate.");
-      }
-    };
-
-    pcRef.current.ontrack = (event) => {
-      console.log("pc.ontrack event received.");
-      if (videoRef.current) {
-        videoRef.current.srcObject = event.streams[0];
-      }
-
-      // Start FPS calculation for the VIEWER
-      if (!isBroadcaster) {
-        console.log("Viewer received track. Starting FPS calculation.");
-        startMonitoring();
-      }
-    };
-
-    pcRef.current.onconnectionstatechange = () => {
-        if (pcRef.current) {
-            console.log("PeerConnection state:", pcRef.current.connectionState);
-            if (pcRef.current.connectionState === 'disconnected' || pcRef.current.connectionState === 'failed' || pcRef.current.connectionState === 'closed') {
-                console.log("PeerConnection disconnected/failed/closed. Cleaning up.");
-                stopStreaming();
-            }
-        }
-    };
-
-    if (isBroadcaster) {
-      console.log('Requesting user media...');
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-        console.log('getUserMedia success!');
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-        }
-        localStreamRef.current = stream;
-        fpsStateRef.current.streamActive = true; // Set via startMonitoring
-
-        stream.getTracks().forEach(track => {
-          try {
-            if (pcRef.current) {
-                pcRef.current.addTrack(track, stream);
-            }
-          } catch (error) {
-            console.error("Error adding track:", error);
-          }
-        });
-
-        // Start FPS calculation for broadcaster
-        startMonitoring();
-      } catch (err) {
-        console.error('getUserMedia error:', err);
-        alert('Could not access webcam. Please check permissions.');
-        stopStreaming(); // Clean up if getUserMedia fails
-      }
-    }
-  }, [sendMessage, startMonitoring, stopStreaming]);
+  }, [uiStopStreaming, sendMessage, refs, state, stopMonitoring, stopBackgroundBlur, cleanupConnection]);
 
   // --- WebSocket Connection with Retry Logic ---
   useEffect(() => {
@@ -258,14 +198,7 @@ function App() {
                 console.log("Broadcaster received 'viewer' request from:", msg.from);
                 if (pcRef.current) {
                   setPeerId(msg.from); // Store target viewer's ID
-                  try {
-                    const offer = await pcRef.current.createOffer();
-                    await pcRef.current.setLocalDescription(offer);
-                    console.log("Broadcaster sending offer to viewer:", msg.from);
-                    sendMessage({ type: 'offer', offer, target: msg.from });
-                  } catch (error) {
-                    console.error("Error creating/sending offer:", error);
-                  }
+                  createAndSendOffer(msg.from);
                 } else {
                   console.error("Broadcaster PC not initialized when viewer connected.");
                 }
@@ -274,19 +207,13 @@ function App() {
               case 'offer': // Received by viewer
                 console.log("Viewer received 'offer' from:", msg.from);
                 setPeerId(msg.from); // Store broadcaster's ID
+                
                 if (!pcRef.current) {
-                  createPeerConnection(false); // Create viewer PC
+                  await createPeerConnection(false, refs, stopStreaming);
                 }
+                
                 if (pcRef.current) {
-                  try {
-                    await pcRef.current.setRemoteDescription(new RTCSessionDescription(msg.offer));
-                    const answer = await pcRef.current.createAnswer();
-                    await pcRef.current.setLocalDescription(answer);
-                    console.log("Viewer sending answer to broadcaster:", msg.from);
-                    sendMessage({ type: 'answer', answer, target: msg.from });
-                  } catch (error) {
-                    console.error("Error handling offer:", error);
-                  }
+                  handleReceivedOffer(msg.offer, msg.from);
                 } else {
                   console.error("Viewer PC could not be initialized for offer.");
                 }
@@ -294,30 +221,12 @@ function App() {
                 
               case 'answer': // Received by broadcaster
                 console.log("Broadcaster received 'answer' from:", msg.from);
-                if (pcRef.current && pcRef.current.signalingState !== 'closed') {
-                  try {
-                    await pcRef.current.setRemoteDescription(new RTCSessionDescription(msg.answer));
-                    console.log("Broadcaster set remote description (answer).");
-                  } catch (error) {
-                    console.error("Error setting remote description (answer):", error);
-                  }
-                } else {
-                  console.warn("Received answer but PC is closed or doesn't exist.");
-                }
+                handleReceivedAnswer(msg.answer);
                 break;
                 
               case 'candidate': // Received by both
                 console.log("Received ICE candidate from:", msg.from);
-                if (pcRef.current && pcRef.current.signalingState !== 'closed') {
-                  try {
-                    await pcRef.current.addIceCandidate(new RTCIceCandidate(msg.candidate));
-                    console.log("Added ICE candidate.");
-                  } catch (e) {
-                    console.error('Error adding received ICE candidate', e);
-                  }
-                } else {
-                  console.warn("Received ICE candidate but PC is closed or doesn't exist.");
-                }
+                handleReceivedCandidate(msg.candidate);
                 break;
                 
               case 'stop': // Received by viewer when broadcaster stops
@@ -392,11 +301,13 @@ function App() {
     };
   }, [isViewing, applyBlur, isSegmentationReady, startBackgroundBlur, stopBackgroundBlur]);
 
-  // Wrappers for UI state service functions
-  const startBroadcasting = useCallback(() => {
-    uiStartBroadcasting(sendMessage, createPeerConnection);
-  }, [uiStartBroadcasting, sendMessage, createPeerConnection]);
+  // Wrapper for startBroadcasting
+  const startBroadcasting = useCallback(async () => {
+    await createPeerConnection(true, refs, stopStreaming);
+    uiStartBroadcasting(sendMessage, () => {}); // Pass empty function since we already created connection
+  }, [uiStartBroadcasting, sendMessage, createPeerConnection, refs, stopStreaming]);
 
+  // Wrapper for startViewing
   const startViewing = useCallback(() => {
     uiStartViewing(sendMessage);
   }, [uiStartViewing, sendMessage]);
