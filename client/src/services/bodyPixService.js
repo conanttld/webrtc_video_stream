@@ -6,7 +6,7 @@ import * as tf from '@tensorflow/tfjs';
  * BodyPix Segmentation Service
  * Handles loading and using the BodyPix model for background segmentation
  */
-export const useBodyPixSegmentation = (setIsSegmentationReady) => {
+export const useBodyPixSegmentation = (setIsSegmentationReady, videoVisualization) => {
   // Refs for BodyPix
   const bodyPixModelRef = useRef(null);
   const modelLoadingPromiseRef = useRef(null);
@@ -67,15 +67,19 @@ export const useBodyPixSegmentation = (setIsSegmentationReady) => {
   /**
    * Segmentation loop for processing video frames with BodyPix
    */
-  const segmentationLoop = useCallback((videoRef, canvasRef) => {
-    if (!bodyPixModelRef.current || !videoRef.current || !canvasRef.current) {
-      segmentationRafRef.current = requestAnimationFrame(() => segmentationLoop(videoRef, canvasRef));
+  const segmentationLoop = useCallback(() => {
+    // Use videoVisualization service if available, otherwise fall back to direct refs
+    const videoRef = videoVisualization ? videoVisualization.videoRef : null;
+    const canvasRef = videoVisualization ? videoVisualization.canvasRef : null;
+    
+    if (!bodyPixModelRef.current || !videoRef?.current || !canvasRef?.current) {
+      segmentationRafRef.current = requestAnimationFrame(segmentationLoop);
       return;
     }
 
     // Ensure video has data
     if (videoRef.current.readyState < 2) {
-      segmentationRafRef.current = requestAnimationFrame(() => segmentationLoop(videoRef, canvasRef));
+      segmentationRafRef.current = requestAnimationFrame(segmentationLoop);
       return;
     }
 
@@ -143,35 +147,45 @@ export const useBodyPixSegmentation = (setIsSegmentationReady) => {
       }
 
       // Continue loop
-      segmentationRafRef.current = requestAnimationFrame(() => segmentationLoop(videoRef, canvasRef));
+      segmentationRafRef.current = requestAnimationFrame(segmentationLoop);
     };
 
     processSegmentation();
-  }, []);
+  }, [videoVisualization]);
 
   /**
    * Start the background blur processing
+   * @param {React.RefObject} [legacyVideoRef] - Optional video ref for legacy support
+   * @param {React.RefObject} [legacyCanvasRef] - Optional canvas ref for legacy support
    */
-  const startBackgroundBlur = useCallback((videoRef, canvasRef) => {
+  const startBackgroundBlur = useCallback((legacyVideoRef, legacyCanvasRef) => {
     console.log("Starting background blur processing...");
     
-    // Hide original video, show processed canvas
-    if (videoRef.current && canvasRef.current) {
-      videoRef.current.classList.add('hidden');
-      canvasRef.current.classList.remove('hidden');
+    // Use videoVisualization service if available
+    if (videoVisualization) {
+      // Switch to blur visualization mode
+      videoVisualization.setVisualizationMode('blur');
+    } else if (legacyVideoRef && legacyCanvasRef) {
+      // Legacy way - direct DOM manipulation
+      if (legacyVideoRef.current && legacyCanvasRef.current) {
+        legacyVideoRef.current.classList.add('hidden');
+        legacyCanvasRef.current.classList.remove('hidden');
+      }
     }
 
     // Start the segmentation loop
     if (segmentationRafRef.current) {
       cancelAnimationFrame(segmentationRafRef.current);
     }
-    segmentationRafRef.current = requestAnimationFrame(() => segmentationLoop(videoRef, canvasRef));
-  }, [segmentationLoop]);
+    segmentationRafRef.current = requestAnimationFrame(segmentationLoop);
+  }, [segmentationLoop, videoVisualization]);
 
   /**
    * Stop the background blur processing
+   * @param {React.RefObject} [legacyVideoRef] - Optional video ref for legacy support
+   * @param {React.RefObject} [legacyCanvasRef] - Optional canvas ref for legacy support
    */
-  const stopBackgroundBlur = useCallback((videoRef, canvasRef) => {
+  const stopBackgroundBlur = useCallback((legacyVideoRef, legacyCanvasRef) => {
     console.log("Stopping background blur processing...");
     
     // Stop the segmentation loop if running
@@ -180,18 +194,24 @@ export const useBodyPixSegmentation = (setIsSegmentationReady) => {
       segmentationRafRef.current = null;
     }
     
-    // Show original video stream
-    if (videoRef.current && canvasRef.current) {
-      videoRef.current.classList.remove('hidden');
-      canvasRef.current.classList.add('hidden');
-      
-      // Clear canvas when hidden
-      const canvasCtx = canvasRef.current.getContext('2d');
-      if (canvasCtx) {
-        canvasCtx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+    // Use videoVisualization service if available
+    if (videoVisualization) {
+      // Switch back to raw video visualization mode
+      videoVisualization.setVisualizationMode('raw');
+    } else if (legacyVideoRef && legacyCanvasRef) {
+      // Legacy way - direct DOM manipulation
+      if (legacyVideoRef.current && legacyCanvasRef.current) {
+        legacyVideoRef.current.classList.remove('hidden');
+        legacyCanvasRef.current.classList.add('hidden');
+        
+        // Clear canvas when hidden
+        const canvasCtx = legacyCanvasRef.current.getContext('2d');
+        if (canvasCtx) {
+          canvasCtx.clearRect(0, 0, legacyCanvasRef.current.width, legacyCanvasRef.current.height);
+        }
       }
     }
-  }, []);
+  }, [videoVisualization]);
 
   return {
     bodyPixModelRef,

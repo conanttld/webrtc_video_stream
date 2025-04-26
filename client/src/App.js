@@ -4,10 +4,18 @@ import useFPSMonitor from './services/fpsMonitorService';
 import useBodyPixSegmentation from './services/bodyPixService';
 import useWebRTCConnection from './services/webrtcService';
 import useWebSocketCommunication from './services/websocketService';
+import { useVideoVisualization } from './services/videoVisualizationService';
 import './App.css';
 
 function App() {
-  // Use the UI State Management Service
+  // Refs for DOM elements
+  const videoRef = useRef(null);
+  const canvasRef = useRef(null);
+
+  // Initialize the Video Visualization Service
+  const videoVisualization = useVideoVisualization();
+
+  // Use the UI State Management Service with videoVisualization
   const {
     fps,
     setFps,
@@ -22,12 +30,9 @@ function App() {
     cleanupInProgressRef,
     startBroadcasting: uiStartBroadcasting,
     startViewing: uiStartViewing,
-    stopStreaming: uiStopStreaming
-  } = useUIState();
-
-  // Refs for DOM elements
-  const videoRef = useRef(null);
-  const canvasRef = useRef(null);
+    stopStreaming: uiStopStreaming,
+    toggleBlur
+  } = useUIState(videoVisualization);
 
   // Use the FPS Monitoring Service
   const {
@@ -38,12 +43,12 @@ function App() {
     fpsStateRef
   } = useFPSMonitor(setFps);
 
-  // Use the BodyPix Segmentation Service
+  // Use the BodyPix Segmentation Service with videoVisualization
   const {
     segmentationRafRef,
     startBackgroundBlur,
     stopBackgroundBlur
-  } = useBodyPixSegmentation(setIsSegmentationReady);
+  } = useBodyPixSegmentation(setIsSegmentationReady, videoVisualization);
 
   // Use the WebSocket Communication Service
   const {
@@ -94,7 +99,7 @@ function App() {
     }
   }, [setPeerId]);
 
-  // Use the WebRTC Connection Service
+  // Use the WebRTC Connection Service with videoVisualization
   const {
     pcRef,
     localStreamRef,
@@ -104,7 +109,7 @@ function App() {
     handleReceivedAnswer,
     handleReceivedCandidate,
     cleanupConnection
-  } = useWebRTCConnection(sendMessage, fpsStateRef, startMonitoring);
+  } = useWebRTCConnection(sendMessage, fpsStateRef, startMonitoring, videoVisualization);
 
   // Update refs object with WebRTC refs
   refs.pcRef = pcRef;
@@ -113,7 +118,7 @@ function App() {
   // Define stopStreaming before it's used in createPeerConnection
   const stopStreaming = useCallback(() => {
     stopMonitoring(); // Stop FPS monitoring
-    stopBackgroundBlur(videoRef, canvasRef); // Stop background blur
+    stopBackgroundBlur(); // Stop background blur without passing refs
     cleanupConnection(); // Clean up WebRTC connection
     uiStopStreaming(sendMessage, refs, state);
   }, [uiStopStreaming, sendMessage, refs, state, stopMonitoring, stopBackgroundBlur, cleanupConnection]);
@@ -186,19 +191,28 @@ function App() {
 
   // --- Apply/Remove Blur Effect (controls segmentation) ---
   useEffect(() => {
-    if (!videoRef.current || !canvasRef.current) return;
+    // Initialize video elements when they're available
+    if (videoRef.current && canvasRef.current) {
+      videoVisualization.initializeVideoElements(videoRef.current, canvasRef.current);
+    }
+  }, [videoVisualization]);
 
-    if (isViewing && applyBlur && isSegmentationReady) {
-      startBackgroundBlur(videoRef, canvasRef);
+  // Updated effect for blur handling
+  useEffect(() => {
+    if (!isViewing || !videoVisualization.videoStreamActiveRef.current) return;
+
+    if (applyBlur && isSegmentationReady) {
+      // Use the bodyPixService with the visualization service
+      startBackgroundBlur();
     } else {
-      stopBackgroundBlur(videoRef, canvasRef);
+      stopBackgroundBlur();
     }
 
     // Cleanup function
     return () => {
-      stopBackgroundBlur(videoRef, canvasRef);
+      stopBackgroundBlur();
     };
-  }, [isViewing, applyBlur, isSegmentationReady, startBackgroundBlur, stopBackgroundBlur]);
+  }, [isViewing, applyBlur, isSegmentationReady, startBackgroundBlur, stopBackgroundBlur, videoVisualization]);
 
   // Wrapper for startBroadcasting
   const startBroadcasting = useCallback(async () => {
@@ -210,6 +224,11 @@ function App() {
   const startViewing = useCallback(() => {
     uiStartViewing(sendMessage);
   }, [uiStartViewing, sendMessage]);
+
+  // Handle blur toggle
+  const handleBlurToggle = useCallback((e) => {
+    toggleBlur(e.target.checked, { startBackgroundBlur, stopBackgroundBlur });
+  }, [toggleBlur, startBackgroundBlur, stopBackgroundBlur]);
 
   // --- Render ---
   return (
@@ -244,7 +263,7 @@ function App() {
               <input
                 type="checkbox"
                 checked={applyBlur}
-                onChange={(e) => setApplyBlur(e.target.checked)}
+                onChange={handleBlurToggle}
               />
               Apply Background Blur (BodyPix)
             </label>

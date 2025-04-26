@@ -4,7 +4,7 @@ import { useState, useCallback, useRef } from 'react';
  * UI State Management Service
  * Manages all UI-related state for the video streaming application
  */
-export const useUIState = () => {
+export const useUIState = (videoVisualization) => {
   // UI-related state
   const [fps, setFps] = useState(0);
   const [isBroadcasting, setIsBroadcasting] = useState(false);
@@ -91,11 +91,30 @@ export const useUIState = () => {
       console.log("Cancelled requestAnimationFrame.");
     }
 
-    // Stop local media tracks
-    if (refs.localStreamRef.current) {
-      console.log("Stopping local video tracks.");
-      refs.localStreamRef.current.getTracks().forEach(track => track.stop());
-      refs.localStreamRef.current = null;
+    // Use videoVisualization service if available
+    if (videoVisualization) {
+      videoVisualization.clearVisualization();
+    } else {
+      // Legacy direct DOM manipulation
+      // Stop local media tracks
+      if (refs.localStreamRef.current) {
+        console.log("Stopping local video tracks.");
+        refs.localStreamRef.current.getTracks().forEach(track => track.stop());
+        refs.localStreamRef.current = null;
+      }
+
+      // Clear video display and ensure canvas is hidden
+      if (refs.videoRef.current) {
+        refs.videoRef.current.srcObject = null;
+        refs.videoRef.current.classList.remove('hidden');
+      }
+      if (refs.canvasRef.current) {
+        refs.canvasRef.current.classList.add('hidden');
+        const canvasCtx = refs.canvasRef.current.getContext('2d');
+        if (canvasCtx) {
+          canvasCtx.clearRect(0, 0, refs.canvasRef.current.width, refs.canvasRef.current.height);
+        }
+      }
     }
 
     // Close PeerConnection
@@ -108,32 +127,29 @@ export const useUIState = () => {
       refs.pcRef.current = null;
     }
 
-    // Clear video display and ensure canvas is hidden
-    if (refs.videoRef.current) {
-      refs.videoRef.current.srcObject = null;
-      refs.videoRef.current.classList.remove('hidden');
-    }
-    if (refs.canvasRef.current) {
-      refs.canvasRef.current.classList.add('hidden');
-      const canvasCtx = refs.canvasRef.current.getContext('2d');
-      if (canvasCtx) {
-        canvasCtx.clearRect(0, 0, refs.canvasRef.current.width, refs.canvasRef.current.height);
-      }
-    }
-
     console.log("Stream stopped and resources cleaned up.");
     
     // Reset cleanup flag when done
     cleanupInProgressRef.current = false;
-  }, [isBroadcasting]);
+  }, [isBroadcasting, videoVisualization]);
 
   /**
    * Toggle background blur effect
    * @param {boolean} value - New blur state (optional - if not provided, will toggle current state)
    */
-  const toggleBlur = useCallback((value) => {
+  const toggleBlur = useCallback((value, bodyPixService) => {
     const newValue = value !== undefined ? value : !applyBlur;
     setApplyBlur(newValue);
+    
+    // Apply/remove blur effect using provided service
+    if (bodyPixService) {
+      if (newValue) {
+        bodyPixService.startBackgroundBlur();
+      } else {
+        bodyPixService.stopBackgroundBlur();
+      }
+    }
+    
     console.log(`Background blur ${newValue ? 'enabled' : 'disabled'}`);
   }, [applyBlur]);
 

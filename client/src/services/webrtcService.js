@@ -4,7 +4,7 @@ import { useCallback, useRef } from 'react';
  * WebRTC Peer Connection Service
  * Handles WebRTC peer connection setup, track management, and connection state
  */
-export const useWebRTCConnection = (sendMessage, fpsStateRef, startMonitoring) => {
+export const useWebRTCConnection = (sendMessage, fpsStateRef, startMonitoring, videoVisualization) => {
   // WebRTC-related refs
   const pcRef = useRef(null);
   const localStreamRef = useRef(null);
@@ -35,7 +35,16 @@ export const useWebRTCConnection = (sendMessage, fpsStateRef, startMonitoring) =
 
     pcRef.current.ontrack = (event) => {
       console.log("pc.ontrack event received.");
-      if (refs.videoRef.current) {
+      
+      // Use the videoVisualization service to handle the video stream
+      if (videoVisualization) {
+        videoVisualization.attachVideoStream(event.streams[0], false);
+        // Set up canvas dimensions once video has metadata
+        videoVisualization.videoRef.current.onloadedmetadata = () => {
+          videoVisualization.setupCanvas();
+        };
+      } else if (refs.videoRef.current) {
+        // Fallback to direct video element manipulation if visualization service not available
         refs.videoRef.current.srcObject = event.streams[0];
       }
 
@@ -63,7 +72,7 @@ export const useWebRTCConnection = (sendMessage, fpsStateRef, startMonitoring) =
     }
 
     return pcRef.current;
-  }, [sendMessage, fpsStateRef, startMonitoring]);
+  }, [sendMessage, fpsStateRef, startMonitoring, videoVisualization]);
 
   /**
    * Sets up broadcaster's media (camera) and adds tracks to the peer connection
@@ -74,7 +83,15 @@ export const useWebRTCConnection = (sendMessage, fpsStateRef, startMonitoring) =
       const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
       console.log('getUserMedia success!');
       
-      if (refs.videoRef.current) {
+      // Use the videoVisualization service to handle the local stream
+      if (videoVisualization) {
+        videoVisualization.attachVideoStream(stream, true);
+        // Set up canvas dimensions once video has metadata
+        videoVisualization.videoRef.current.onloadedmetadata = () => {
+          videoVisualization.setupCanvas();
+        };
+      } else if (refs.videoRef.current) {
+        // Fallback to direct video element manipulation if visualization service not available
         refs.videoRef.current.srcObject = stream;
       }
       
@@ -99,7 +116,7 @@ export const useWebRTCConnection = (sendMessage, fpsStateRef, startMonitoring) =
       alert('Could not access webcam. Please check permissions.');
       stopStreaming(); // Clean up if getUserMedia fails
     }
-  }, [startMonitoring]);
+  }, [videoVisualization, startMonitoring]);
 
   /**
    * Handles the creation and sending of an offer to a remote peer
@@ -199,7 +216,12 @@ export const useWebRTCConnection = (sendMessage, fpsStateRef, startMonitoring) =
       pcRef.current.close();
       pcRef.current = null;
     }
-  }, []);
+
+    // Clean up visualization if the service is available
+    if (videoVisualization) {
+      videoVisualization.clearVisualization();
+    }
+  }, [videoVisualization]);
 
   return {
     pcRef,
