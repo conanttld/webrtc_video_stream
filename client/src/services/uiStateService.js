@@ -60,14 +60,15 @@ export const useUIState = (videoVisualization) => {
     cleanupInProgressRef.current = true;
     console.log("Stop Streaming called.");
 
-    // Send stop signal if broadcasting
+    // Send stop signal if broadcasting - this will stop all viewers
     if (isBroadcasting && state.fpsStateRef.current.myId) {
-      console.log("Sending 'stop' signal to peer:", state.fpsStateRef.current.myId);
-      sendMessage({ type: 'stop', target: state.fpsStateRef.current.myId });
-    } else if (isBroadcasting) {
-      console.warn("Stop clicked (broadcaster), but no peer ID known.");
-      // Consider a general stop message if server supports broadcast
-      // sendMessage({ type: 'stop' });
+      console.log("Sending 'stop' signal to all viewers");
+      sendMessage({ type: 'stop' }); // No target means stop all viewers
+    } else if (isViewing) {
+      // If we're viewing, send a special viewer-stop message to just update count without stopping broadcast
+      console.log("Viewer stopping - notifying server to update viewer count");
+      // We don't need to specify a target - the server knows who is sending the message
+      sendMessage({ type: 'stop' }); // Simple stop message from viewer is enough
     }
 
     state.fpsStateRef.current.streamActive = false;
@@ -136,7 +137,7 @@ export const useUIState = (videoVisualization) => {
     
     // Reset cleanup flag when done
     cleanupInProgressRef.current = false;
-  }, [isBroadcasting, videoVisualization]);
+  }, [isBroadcasting, isViewing, videoVisualization]);
 
   /**
    * Toggle background blur effect
