@@ -13,6 +13,7 @@ This application is a real-time video streaming platform built with WebRTC, Reac
    - Establishes WebRTC peer connections
    - Processes video streams with TensorFlow.js BodyPix for background blur
    - Manages UI states for broadcasting and viewing
+   - **Implements a modular architecture with specialized services**
 
 2. **Signaling Server (Node.js)**
    - Facilitates WebRTC connection establishment
@@ -26,7 +27,42 @@ This application is a real-time video streaming platform built with WebRTC, Reac
 - **Machine Learning**: TensorFlow.js, BodyPix model
 - **Communication**: WebSockets for signaling, WebRTC for media streaming
 
-## Client-Side Operation
+## Client-Side Architecture
+
+### Service-Based Design
+
+The client application follows a modular, service-based architecture that separates concerns:
+
+1. **UI State Management Service (`uiStateService.js`)**
+   - Manages application state (broadcasting, viewing, blur settings)
+   - Centralizes UI-related state changes
+   - Provides hooks for component integration
+
+2. **FPS Monitoring Service (`fpsMonitorService.js`)**
+   - Calculates and tracks frames per second in video streams
+   - Manages animation frames for performance monitoring
+   - Provides real-time performance metrics
+
+3. **BodyPix Segmentation Service (`bodyPixService.js`)**
+   - Handles TensorFlow.js and BodyPix model initialization
+   - Performs background blur processing via segmentation
+   - Manages canvas rendering and video processing
+
+4. **WebRTC Connection Service (`webrtcService.js`)**
+   - Manages WebRTC peer connections
+   - Handles media stream acquisition and track management
+   - Processes signaling data (offers, answers, ICE candidates)
+
+5. **WebSocket Communication Service (`websocketService.js`)**
+   - Manages WebSocket connection establishment and maintenance
+   - Implements reconnection logic with exponential backoff
+   - Handles message serialization and transmission
+
+This service-oriented architecture improves:
+- **Maintainability**: Each service has a clearly defined responsibility
+- **Testability**: Services can be tested in isolation
+- **Reusability**: Services can be used across different components
+- **Scalability**: New features can be added without modifying existing services
 
 ### Key Components
 
@@ -35,14 +71,14 @@ This application is a real-time video streaming platform built with WebRTC, Reac
    - Video display area (shows webcam feed or received stream)
    - Background blur toggle option (for viewers)
    - FPS (Frames Per Second) counter
-   - **Connection status indicator** with visual feedback
+   - Connection status indicator with visual feedback
 
 2. **WebRTC Connection Management**
    - `RTCPeerConnection` setup and configuration
    - ICE candidate gathering and exchange
    - SDP (Session Description Protocol) offer/answer exchange
-   - **Robust connection retry logic with exponential backoff**
-   - **Connection state management and visualization**
+   - Robust connection retry logic with exponential backoff
+   - Connection state management and visualization
 
 3. **Video Processing**
    - Raw webcam feed capture
@@ -57,7 +93,7 @@ The client application maintains several states:
 - `applyBlur`: Controls whether background blur is applied to the video
 - `isSegmentationReady`: Tracks if the BodyPix model is loaded and ready
 - `fps`: Tracks the current frames per second rate of the video
-- **`connectionStatus`**: Tracks the current WebSocket connection status (connected, connecting, disconnected, error)
+- `connectionStatus`: Tracks the current WebSocket connection status (connected, connecting, disconnected, error)
 
 ### Process Flow
 
