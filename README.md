@@ -58,6 +58,13 @@ The client application follows a modular, service-based architecture that separa
    - Implements reconnection logic with exponential backoff
    - Handles message serialization and transmission
 
+6. **Video Visualization Service (`videoVisualizationService.js`)**
+   - Centralizes and unifies the state and control of video and canvas visualization
+   - Manages video stream attachment and display properties
+   - Handles switching between raw video and processed canvas modes
+   - Ensures proper display of video streams received through WebRTC
+   - Provides a consistent interface for other services to interact with visual elements
+
 This service-oriented architecture improves:
 - **Maintainability**: Each service has a clearly defined responsibility
 - **Testability**: Services can be tested in isolation
@@ -84,6 +91,7 @@ This service-oriented architecture improves:
    - Raw webcam feed capture
    - Optional background segmentation and blur using BodyPix
    - Real-time FPS calculation
+   - **Unified video visualization through centralized service**
 
 ### State Management
 
@@ -94,6 +102,8 @@ The client application maintains several states:
 - `isSegmentationReady`: Tracks if the BodyPix model is loaded and ready
 - `fps`: Tracks the current frames per second rate of the video
 - `connectionStatus`: Tracks the current WebSocket connection status (connected, connecting, disconnected, error)
+- **`videoStreamActive`**: Tracks if a video stream is currently active and attached
+- **`visualizationMode`**: Controls the current video display mode (raw or processed)
 
 ### Process Flow
 
@@ -129,12 +139,14 @@ The client application maintains several states:
 
 #### Background Blur Processing
 1. When background blur is enabled, the segmentation loop is started
-2. For each video frame:
+2. **The videoVisualization service switches display mode from raw video to processed canvas**
+3. For each video frame:
    - The BodyPix model segments the person from the background
    - The original frame is drawn to a canvas
    - A blurred version of the frame is created
    - A composite frame is created, with the person from the original frame and the background from the blurred frame
    - The composite frame is displayed on the canvas
+4. **When disabled, the visualization service switches back to raw video display**
 
 ## Server-Side Operation
 
@@ -224,12 +236,12 @@ This direct connection operates outside the server, reducing latency and server 
 
 For broadcasting:
 ```
-Webcam → getUserMedia() → RTCPeerConnection → Peer-to-Peer → Viewer
+Webcam → getUserMedia() → videoVisualization service → RTCPeerConnection → Peer-to-Peer → Viewer
 ```
 
 For viewing with background blur:
 ```
-P2P Stream → Video Element → BodyPix Segmentation → Canvas → Display
+P2P Stream → videoVisualization service → BodyPix Segmentation → Canvas → Display
 ```
 
 ## Performance Considerations
@@ -250,6 +262,28 @@ P2P Stream → Video Element → BodyPix Segmentation → Canvas → Display
    - Cancellation of animation frames when not in use
    - Proper cleanup of media tracks and connections on stop
    - Memory management through reference cleanup
+
+## Integration Improvements
+
+1. **Unified Video Handling**
+   - Centralized video stream management through the videoVisualization service
+   - Consistent handling of video elements across different components
+   - Improved reliability of video stream display for viewers
+
+2. **Enhanced Service Collaboration**
+   - Better integration between services through proper dependency injection
+   - Clear separation of concerns with video handling isolated in its own service
+   - Services now communicate through well-defined interfaces
+
+3. **Improved User Experience**
+   - More reliable background blur toggle functionality
+   - Better handling of video stream attachment and display
+   - Smoother transitions between video visualization modes
+
+4. **Code Maintainability**
+   - Reduced code duplication for video handling across services
+   - Better organized video-related functionality
+   - More consistent state management for video elements
 
 ## Connection Reliability Improvements
 
@@ -294,4 +328,4 @@ P2P Stream → Video Element → BodyPix Segmentation → Canvas → Display
 
 ## Conclusion
 
-This WebRTC application demonstrates a complete implementation of real-time video streaming with optional ML-based video processing. The combination of WebSockets for signaling and WebRTC for media transport creates a scalable and efficient architecture where the server's role is minimized once connections are established. **The improved connection handling ensures a more reliable user experience, with transparent feedback about the application's connection state.**
+This WebRTC application demonstrates a complete implementation of real-time video streaming with optional ML-based video processing. The combination of WebSockets for signaling and WebRTC for media transport creates a scalable and efficient architecture where the server's role is minimized once connections are established. **The improved connection handling ensures a more reliable user experience, with transparent feedback about the application's connection state. The newly added videoVisualization service further enhances reliability by centralizing video stream handling and ensuring proper visualization in all states of the application.**
