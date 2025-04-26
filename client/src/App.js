@@ -226,6 +226,9 @@ function App() {
     const baseRetryDelay = 1000; // Start with 1 second delay
     let isMounted = true; // Track component mount state to prevent setState on unmounted component
     
+    // Set initial status to connecting
+    setConnectionStatus('connecting');
+    
     // Clear any existing retry timeout
     if (wsRetryTimeoutRef.current) {
       clearTimeout(wsRetryTimeoutRef.current);
@@ -272,6 +275,7 @@ function App() {
               retryCount++;
               const retryDelay = baseRetryDelay * Math.pow(1.5, retryCount);
               console.log(`Retrying connection in ${retryDelay}ms... (attempt ${retryCount + 1}/${maxRetries})`);
+              setConnectionStatus('connecting');
               wsRetryTimeoutRef.current = setTimeout(checkServerAndConnect, retryDelay);
             } else {
               console.log("Max retries reached. Stopping connection attempts.");
@@ -384,10 +388,13 @@ function App() {
         if (!isMounted) return;
         
         console.error("Error in WebSocket connection setup:", error);
+        setConnectionStatus('error');
+        
         if (retryCount < maxRetries) {
           retryCount++;
           const retryDelay = baseRetryDelay * Math.pow(1.5, retryCount);
           console.log(`Error connecting, retrying in ${retryDelay}ms... (attempt ${retryCount + 1}/${maxRetries})`);
+          setConnectionStatus('connecting');
           wsRetryTimeoutRef.current = setTimeout(checkServerAndConnect, retryDelay);
         } else {
           console.log("Max retries reached. Stopping connection attempts.");
@@ -658,11 +665,22 @@ function App() {
   return (
     <div className="App">
       <h1>WebRTC Webcam Stream with BodyPix Segmentation</h1>
+      
+      {/* Connection Status Indicator */}
+      <div className="connection-status-container">
+        <span className={`connection-status status-${connectionStatus}`}>
+          {connectionStatus === 'connected' && 'Connected to server'}
+          {connectionStatus === 'connecting' && 'Connecting to server...'}
+          {connectionStatus === 'disconnected' && 'Disconnected from server'}
+          {connectionStatus === 'error' && 'Connection error'}
+        </span>
+      </div>
+      
       <div className="controls">
-        <button onClick={startBroadcasting} disabled={isBroadcasting || isViewing}>
+        <button onClick={startBroadcasting} disabled={isBroadcasting || isViewing || connectionStatus !== 'connected'}>
           Start Broadcasting
         </button>
-        <button onClick={startViewing} disabled={isBroadcasting || isViewing}>
+        <button onClick={startViewing} disabled={isBroadcasting || isViewing || connectionStatus !== 'connected'}>
           Start Viewing
         </button>
         {/* Show stop button only when broadcasting or viewing */}

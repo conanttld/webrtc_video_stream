@@ -71,7 +71,10 @@
 */
 
 .controls {
+  display: flex;
+  align-items: center;
   margin-bottom: 15px;
+  flex-wrap: wrap;
 }
 
 .controls button {
@@ -96,4 +99,31 @@
   margin-top: 10px;
   font-size: 1.1em;
   color: #555;
+}
+
+/* Add these styles to your App.css file */
+.connection-status {
+  display: inline-block;
+  padding: 5px 10px;
+  border-radius: 4px;
+  font-size: 0.9rem;
+  font-weight: 500;
+  margin-left: 10px;
+  color: white;
+}
+
+.status-connected {
+  background-color: #4CAF50; /* Green */
+}
+
+.status-connecting {
+  background-color: #FFC107; /* Amber */
+}
+
+.status-disconnected {
+  background-color: #F44336; /* Red */
+}
+
+.status-error {
+  background-color: #9C27B0; /* Purple */
 }
