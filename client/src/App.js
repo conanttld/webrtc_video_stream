@@ -1,15 +1,29 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useRef, useEffect, useCallback } from 'react';
 import * as bodyPix from '@tensorflow-models/body-pix';
 import * as tf from '@tensorflow/tfjs';
+import useUIState from './services/uiStateService';
 import './App.css';
 
 function App() {
-  const [fps, setFps] = useState(0);
-  const [isBroadcasting, setIsBroadcasting] = useState(false);
-  const [isViewing, setIsViewing] = useState(false);
-  const [applyBlur, setApplyBlur] = useState(false);
-  const [isSegmentationReady, setIsSegmentationReady] = useState(false);
-  const [connectionStatus, setConnectionStatus] = useState('disconnected'); // New state for connection status
+  // Use the UI State Management Service
+  const {
+    fps,
+    setFps,
+    isBroadcasting,
+    isViewing,
+    applyBlur,
+    setApplyBlur,
+    isSegmentationReady,
+    setIsSegmentationReady,
+    connectionStatus,
+    setConnectionStatus,
+    cleanupInProgressRef,
+    startBroadcasting: uiStartBroadcasting,
+    startViewing: uiStartViewing,
+    stopStreaming: uiStopStreaming
+  } = useUIState();
+
+  // Refs that were previously defined in App component
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const wsRef = useRef(null);
@@ -18,9 +32,8 @@ function App() {
   const rafRef = useRef(null);
   const segmentationRafRef = useRef(null);
   const bodyPixModelRef = useRef(null);
-  const modelLoadingPromiseRef = useRef(null); // Ref to track model loading promise
-  const cleanupInProgressRef = useRef(false); // Ref to prevent multiple cleanup calls
-  const wsRetryTimeoutRef = useRef(null); // Ref for retry timeout
+  const modelLoadingPromiseRef = useRef(null);
+  const wsRetryTimeoutRef = useRef(null);
   const fpsStateRef = useRef({
     frameCount: 0,
     lastFrameTime: 0,
@@ -29,6 +42,22 @@ function App() {
     streamActive: false,
     myId: null
   });
+
+  // Create a refs object to pass to the UI state service
+  const refs = {
+    videoRef,
+    canvasRef,
+    wsRef,
+    pcRef,
+    localStreamRef,
+    rafRef,
+    segmentationRafRef
+  };
+
+  // Create a state object to pass to the UI state service
+  const state = {
+    fpsStateRef
+  };
 
   // --- Initialize BodyPix Model ---
   useEffect(() => {
@@ -80,144 +109,142 @@ function App() {
       setIsSegmentationReady(false);
       console.log("Cleaning up BodyPix model");
     };
+  }, [setIsSegmentationReady]);
+
+  // --- Helper to send WebSocket messages ---
+  const sendMessage = useCallback((message) => {
+    if (!wsRef.current) {
+      console.warn("Cannot send message: WebSocket not initialized", message);
+      return false;
+    }
+
+    if (wsRef.current.readyState === WebSocket.OPEN) {
+      try {
+        wsRef.current.send(JSON.stringify(message));
+        return true;
+      } catch (error) {
+        console.error("Error sending WebSocket message:", error);
+        return false;
+      }
+    } else {
+      console.warn(`WebSocket not ready (state: ${
+        wsRef.current.readyState === WebSocket.CONNECTING ? 'CONNECTING' :
+        wsRef.current.readyState === WebSocket.CLOSING ? 'CLOSING' :
+        wsRef.current.readyState === WebSocket.CLOSED ? 'CLOSED' : 'UNKNOWN'
+      }). Message not sent:`, message);
+      return false;
+    }
   }, []);
 
-  // Rest of the component remains the same until WebSocket connection
-  // ...existing code...
-
-  const segmentationLoop = useCallback(() => {
-    if (!bodyPixModelRef.current || !videoRef.current || !canvasRef.current) {
-      segmentationRafRef.current = requestAnimationFrame(segmentationLoop);
+  // --- FPS Calculation ---
+  const calculateFPS = useCallback(() => {
+    if (!fpsStateRef.current.streamActive || !fpsStateRef.current.isCalculatingFPS) {
+      setFps(0);
+      fpsStateRef.current.isCalculatingFPS = false;
+      rafRef.current = null;
       return;
     }
 
-    // Ensure video has data
-    if (videoRef.current.readyState < 2) {
-      segmentationRafRef.current = requestAnimationFrame(segmentationLoop);
-      return;
+    const currentTime = performance.now();
+    const deltaTime = currentTime - fpsStateRef.current.lastFrameTime;
+    fpsStateRef.current.frameCount++;
+
+    if (deltaTime >= 1000) {
+      const calculatedFps = (fpsStateRef.current.frameCount / deltaTime) * 1000;
+      setFps(Math.round(calculatedFps));
+      fpsStateRef.current.frameCount = 0;
+      fpsStateRef.current.lastFrameTime = currentTime;
     }
 
-    const processSegmentation = async () => {
+    rafRef.current = requestAnimationFrame(calculateFPS);
+  }, [setFps]);
+
+  // --- Peer Connection Setup ---
+  const createPeerConnection = useCallback(async (isBroadcaster) => {
+    if (pcRef.current) {
+      console.log("Closing existing PeerConnection");
+      pcRef.current.close();
+    }
+    console.log("Creating new PeerConnection. isBroadcaster:", isBroadcaster);
+    pcRef.current = new RTCPeerConnection();
+
+    pcRef.current.onicecandidate = ({ candidate }) => {
+      if (candidate && fpsStateRef.current.myId) { // Ensure we have a target ID
+        console.log("Sending ICE candidate to:", fpsStateRef.current.myId);
+        sendMessage({ type: 'candidate', candidate, target: fpsStateRef.current.myId });
+      } else if (candidate) {
+          console.warn("No target ID found for ICE candidate.");
+      }
+    };
+
+    pcRef.current.ontrack = (event) => {
+      console.log("pc.ontrack event received.");
+      if (videoRef.current) {
+        videoRef.current.srcObject = event.streams[0];
+      }
+
+      // Start FPS calculation for the VIEWER
+      if (!isBroadcaster) {
+        console.log("Viewer received track. Starting FPS calculation.");
+        if (!fpsStateRef.current.isCalculatingFPS) {
+          fpsStateRef.current.streamActive = true; // Redundant? Set by isViewing
+          fpsStateRef.current.isCalculatingFPS = true;
+          fpsStateRef.current.frameCount = 0;
+          fpsStateRef.current.lastFrameTime = performance.now();
+          fpsStateRef.current.lastFrameReceivedTime = performance.now(); // Initialize
+          if (rafRef.current) cancelAnimationFrame(rafRef.current);
+          rafRef.current = requestAnimationFrame(calculateFPS);
+        }
+      }
+    };
+
+    pcRef.current.onconnectionstatechange = () => {
+        if (pcRef.current) {
+            console.log("PeerConnection state:", pcRef.current.connectionState);
+            if (pcRef.current.connectionState === 'disconnected' || pcRef.current.connectionState === 'failed' || pcRef.current.connectionState === 'closed') {
+                console.log("PeerConnection disconnected/failed/closed. Cleaning up.");
+                stopStreaming();
+            }
+        }
+    };
+
+    if (isBroadcaster) {
+      console.log('Requesting user media...');
       try {
-        // Segment the person from the video
-        const segmentation = await bodyPixModelRef.current.segmentPerson(videoRef.current, {
-          flipHorizontal: false,
-          internalResolution: 'medium',
-          segmentationThreshold: 0.7
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        console.log('getUserMedia success!');
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+        }
+        localStreamRef.current = stream;
+        fpsStateRef.current.streamActive = true; // Set via setIsBroadcasting
+
+        stream.getTracks().forEach(track => {
+          try {
+            if (pcRef.current) {
+                pcRef.current.addTrack(track, stream);
+            }
+          } catch (error) {
+            console.error("Error adding track:", error);
+          }
         });
 
-        // Get canvas context and make sure dimensions match video
-        const ctx = canvasRef.current.getContext('2d');
-        const videoWidth = videoRef.current.videoWidth;
-        const videoHeight = videoRef.current.videoHeight;
-        
-        if (canvasRef.current.width !== videoWidth || canvasRef.current.height !== videoHeight) {
-          canvasRef.current.width = videoWidth;
-          canvasRef.current.height = videoHeight;
+        // Start FPS calculation for broadcaster
+        if (!fpsStateRef.current.isCalculatingFPS) {
+          console.log('Starting FPS calculation for broadcaster...');
+          fpsStateRef.current.isCalculatingFPS = true;
+          fpsStateRef.current.frameCount = 0;
+          fpsStateRef.current.lastFrameTime = performance.now();
+          if (rafRef.current) cancelAnimationFrame(rafRef.current);
+          rafRef.current = requestAnimationFrame(calculateFPS);
         }
-
-        // Draw original video to canvas first
-        ctx.drawImage(videoRef.current, 0, 0, videoWidth, videoHeight);
-        
-        // Get the original frame as ImageData
-        const originalFrame = ctx.getImageData(0, 0, videoWidth, videoHeight);
-        
-        // Create a blurred version using a temporary canvas
-        const tempCanvas = document.createElement('canvas');
-        tempCanvas.width = videoWidth;
-        tempCanvas.height = videoHeight;
-        const tempCtx = tempCanvas.getContext('2d');
-        tempCtx.drawImage(videoRef.current, 0, 0, videoWidth, videoHeight);
-        tempCtx.filter = 'blur(8px)';
-        tempCtx.drawImage(tempCanvas, 0, 0, videoWidth, videoHeight);
-        
-        // Get the blurred frame
-        const blurredFrame = tempCtx.getImageData(0, 0, videoWidth, videoHeight);
-        
-        // Create final composite frame
-        const compositeFrame = new ImageData(
-          new Uint8ClampedArray(originalFrame.data),
-          videoWidth,
-          videoHeight
-        );
-        
-        // Replace background pixels with blurred pixels
-        for (let i = 0; i < segmentation.data.length; i++) {
-          // If pixel is not part of person (0), use the blurred pixel
-          if (segmentation.data[i] === 0) {
-            const pixelIndex = i * 4;
-            compositeFrame.data[pixelIndex] = blurredFrame.data[pixelIndex];         // R
-            compositeFrame.data[pixelIndex + 1] = blurredFrame.data[pixelIndex + 1]; // G
-            compositeFrame.data[pixelIndex + 2] = blurredFrame.data[pixelIndex + 2]; // B
-            // Keep original alpha
-          }
-        }
-        
-        // Put the composite frame back to the main canvas
-        ctx.putImageData(compositeFrame, 0, 0);
-        
-      } catch (error) {
-        console.error("Error in segmentation processing:", error);
-      }
-
-      // Continue loop
-      segmentationRafRef.current = requestAnimationFrame(segmentationLoop);
-    };
-
-    processSegmentation();
-  }, []);
-
-  // --- Apply/Remove Blur Effect (controls segmentation) ---
-  useEffect(() => {
-    const videoElement = videoRef.current;
-    const canvasElement = canvasRef.current;
-
-    if (!videoElement || !canvasElement) return;
-
-    if (isViewing && applyBlur && isSegmentationReady) {
-      console.log("Showing processed stream with background blur...");
-      // Hide original video, show processed canvas
-      videoElement.classList.add('hidden');
-      canvasElement.classList.remove('hidden');
-
-      // Start the segmentation loop
-      if (segmentationRafRef.current) {
-        cancelAnimationFrame(segmentationRafRef.current);
-      }
-      segmentationRafRef.current = requestAnimationFrame(segmentationLoop);
-
-    } else {
-      // Stop the segmentation loop if running
-      if (segmentationRafRef.current) {
-        console.log("Stopping segmentation processing.");
-        cancelAnimationFrame(segmentationRafRef.current);
-        segmentationRafRef.current = null;
-      }
-      
-      // Show original video stream
-      console.log("Showing original video stream...");
-      videoElement.classList.remove('hidden');
-      canvasElement.classList.add('hidden');
-      
-      // Clear canvas when hidden
-      const canvasCtx = canvasElement.getContext('2d');
-      if (canvasCtx) {
-        canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+      } catch (err) {
+        console.error('getUserMedia error:', err);
+        alert('Could not access webcam. Please check permissions.');
+        stopStreaming(); // Clean up if getUserMedia fails
       }
     }
-
-    // Cleanup function
-    return () => {
-      if (segmentationRafRef.current) {
-        cancelAnimationFrame(segmentationRafRef.current);
-        segmentationRafRef.current = null;
-      }
-      if (videoElement && canvasElement) {
-        videoElement.classList.remove('hidden');
-        canvasElement.classList.add('hidden');
-      }
-    };
-  }, [isViewing, applyBlur, isSegmentationReady, segmentationLoop]);
+  }, [sendMessage, calculateFPS]);
 
   // --- WebSocket Connection with Retry Logic ---
   useEffect(() => {
@@ -428,238 +455,153 @@ function App() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // Empty dependency array ensures this runs only once on mount
 
-  // --- Helper to send WebSocket messages ---
-  const sendMessage = useCallback((message) => {
-    if (!wsRef.current) {
-      console.warn("Cannot send message: WebSocket not initialized", message);
-      return false;
-    }
-
-    if (wsRef.current.readyState === WebSocket.OPEN) {
-      try {
-        wsRef.current.send(JSON.stringify(message));
-        return true;
-      } catch (error) {
-        console.error("Error sending WebSocket message:", error);
-        return false;
-      }
-    } else {
-      console.warn(`WebSocket not ready (state: ${
-        wsRef.current.readyState === WebSocket.CONNECTING ? 'CONNECTING' :
-        wsRef.current.readyState === WebSocket.CLOSING ? 'CLOSING' :
-        wsRef.current.readyState === WebSocket.CLOSED ? 'CLOSED' : 'UNKNOWN'
-      }). Message not sent:`, message);
-      return false;
-    }
-  }, []);
-
-  // --- FPS Calculation ---
-  const calculateFPS = useCallback(() => {
-    if (!fpsStateRef.current.streamActive || !fpsStateRef.current.isCalculatingFPS) {
-      setFps(0);
-      fpsStateRef.current.isCalculatingFPS = false;
-      rafRef.current = null;
+  // --- Segmentation Loop ---
+  const segmentationLoop = useCallback(() => {
+    if (!bodyPixModelRef.current || !videoRef.current || !canvasRef.current) {
+      segmentationRafRef.current = requestAnimationFrame(segmentationLoop);
       return;
     }
 
-    const currentTime = performance.now();
-    const deltaTime = currentTime - fpsStateRef.current.lastFrameTime;
-    fpsStateRef.current.frameCount++;
-
-    if (deltaTime >= 1000) {
-      const calculatedFps = (fpsStateRef.current.frameCount / deltaTime) * 1000;
-      setFps(Math.round(calculatedFps));
-      fpsStateRef.current.frameCount = 0;
-      fpsStateRef.current.lastFrameTime = currentTime;
+    // Ensure video has data
+    if (videoRef.current.readyState < 2) {
+      segmentationRafRef.current = requestAnimationFrame(segmentationLoop);
+      return;
     }
 
-    rafRef.current = requestAnimationFrame(calculateFPS);
-  }, []); // No dependencies needed as it uses refs and setFps
-
-  // --- Peer Connection Setup ---
-  const createPeerConnection = useCallback(async (isBroadcaster) => {
-    if (pcRef.current) {
-      console.log("Closing existing PeerConnection");
-      pcRef.current.close();
-    }
-    console.log("Creating new PeerConnection. isBroadcaster:", isBroadcaster);
-    pcRef.current = new RTCPeerConnection();
-
-    pcRef.current.onicecandidate = ({ candidate }) => {
-      if (candidate && fpsStateRef.current.myId) { // Ensure we have a target ID
-        console.log("Sending ICE candidate to:", fpsStateRef.current.myId);
-        sendMessage({ type: 'candidate', candidate, target: fpsStateRef.current.myId });
-      } else if (candidate) {
-          console.warn("No target ID found for ICE candidate.");
-      }
-    };
-
-    pcRef.current.ontrack = (event) => {
-      console.log("pc.ontrack event received.");
-      if (videoRef.current) {
-        videoRef.current.srcObject = event.streams[0];
-      }
-
-      // Start FPS calculation for the VIEWER
-      if (!isBroadcaster) {
-        console.log("Viewer received track. Starting FPS calculation.");
-        if (!fpsStateRef.current.isCalculatingFPS) {
-          fpsStateRef.current.streamActive = true; // Redundant? Set by isViewing
-          fpsStateRef.current.isCalculatingFPS = true;
-          fpsStateRef.current.frameCount = 0;
-          fpsStateRef.current.lastFrameTime = performance.now();
-          fpsStateRef.current.lastFrameReceivedTime = performance.now(); // Initialize
-          if (rafRef.current) cancelAnimationFrame(rafRef.current);
-          rafRef.current = requestAnimationFrame(calculateFPS);
-        }
-      }
-    };
-
-    pcRef.current.onconnectionstatechange = () => {
-        if (pcRef.current) {
-            console.log("PeerConnection state:", pcRef.current.connectionState);
-            if (pcRef.current.connectionState === 'disconnected' || pcRef.current.connectionState === 'failed' || pcRef.current.connectionState === 'closed') {
-                console.log("PeerConnection disconnected/failed/closed. Cleaning up.");
-                stopStreaming();
-            }
-        }
-    };
-
-    if (isBroadcaster) {
-      console.log('Requesting user media...');
+    const processSegmentation = async () => {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-        console.log('getUserMedia success!');
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-        }
-        localStreamRef.current = stream;
-        fpsStateRef.current.streamActive = true; // Set via setIsBroadcasting
-
-        stream.getTracks().forEach(track => {
-          try {
-            if (pcRef.current) {
-                pcRef.current.addTrack(track, stream);
-            }
-          } catch (error) {
-            console.error("Error adding track:", error);
-          }
+        // Segment the person from the video
+        const segmentation = await bodyPixModelRef.current.segmentPerson(videoRef.current, {
+          flipHorizontal: false,
+          internalResolution: 'medium',
+          segmentationThreshold: 0.7
         });
 
-        // Start FPS calculation for broadcaster
-        if (!fpsStateRef.current.isCalculatingFPS) {
-          console.log('Starting FPS calculation for broadcaster...');
-          fpsStateRef.current.isCalculatingFPS = true;
-          fpsStateRef.current.frameCount = 0;
-          fpsStateRef.current.lastFrameTime = performance.now();
-          if (rafRef.current) cancelAnimationFrame(rafRef.current);
-          rafRef.current = requestAnimationFrame(calculateFPS);
+        // Get canvas context and make sure dimensions match video
+        const ctx = canvasRef.current.getContext('2d');
+        const videoWidth = videoRef.current.videoWidth;
+        const videoHeight = videoRef.current.videoHeight;
+        
+        if (canvasRef.current.width !== videoWidth || canvasRef.current.height !== videoHeight) {
+          canvasRef.current.width = videoWidth;
+          canvasRef.current.height = videoHeight;
         }
-      } catch (err) {
-        console.error('getUserMedia error:', err);
-        alert('Could not access webcam. Please check permissions.');
-        stopStreaming(); // Clean up if getUserMedia fails
+
+        // Draw original video to canvas first
+        ctx.drawImage(videoRef.current, 0, 0, videoWidth, videoHeight);
+        
+        // Get the original frame as ImageData
+        const originalFrame = ctx.getImageData(0, 0, videoWidth, videoHeight);
+        
+        // Create a blurred version using a temporary canvas
+        const tempCanvas = document.createElement('canvas');
+        tempCanvas.width = videoWidth;
+        tempCanvas.height = videoHeight;
+        const tempCtx = tempCanvas.getContext('2d');
+        tempCtx.drawImage(videoRef.current, 0, 0, videoWidth, videoHeight);
+        tempCtx.filter = 'blur(8px)';
+        tempCtx.drawImage(tempCanvas, 0, 0, videoWidth, videoHeight);
+        
+        // Get the blurred frame
+        const blurredFrame = tempCtx.getImageData(0, 0, videoWidth, videoHeight);
+        
+        // Create final composite frame
+        const compositeFrame = new ImageData(
+          new Uint8ClampedArray(originalFrame.data),
+          videoWidth,
+          videoHeight
+        );
+        
+        // Replace background pixels with blurred pixels
+        for (let i = 0; i < segmentation.data.length; i++) {
+          // If pixel is not part of person (0), use the blurred pixel
+          if (segmentation.data[i] === 0) {
+            const pixelIndex = i * 4;
+            compositeFrame.data[pixelIndex] = blurredFrame.data[pixelIndex];         // R
+            compositeFrame.data[pixelIndex + 1] = blurredFrame.data[pixelIndex + 1]; // G
+            compositeFrame.data[pixelIndex + 2] = blurredFrame.data[pixelIndex + 2]; // B
+            // Keep original alpha
+          }
+        }
+        
+        // Put the composite frame back to the main canvas
+        ctx.putImageData(compositeFrame, 0, 0);
+        
+      } catch (error) {
+        console.error("Error in segmentation processing:", error);
+      }
+
+      // Continue loop
+      segmentationRafRef.current = requestAnimationFrame(segmentationLoop);
+    };
+
+    processSegmentation();
+  }, []);
+
+  // --- Apply/Remove Blur Effect (controls segmentation) ---
+  useEffect(() => {
+    const videoElement = videoRef.current;
+    const canvasElement = canvasRef.current;
+
+    if (!videoElement || !canvasElement) return;
+
+    if (isViewing && applyBlur && isSegmentationReady) {
+      console.log("Showing processed stream with background blur...");
+      // Hide original video, show processed canvas
+      videoElement.classList.add('hidden');
+      canvasElement.classList.remove('hidden');
+
+      // Start the segmentation loop
+      if (segmentationRafRef.current) {
+        cancelAnimationFrame(segmentationRafRef.current);
+      }
+      segmentationRafRef.current = requestAnimationFrame(segmentationLoop);
+
+    } else {
+      // Stop the segmentation loop if running
+      if (segmentationRafRef.current) {
+        console.log("Stopping segmentation processing.");
+        cancelAnimationFrame(segmentationRafRef.current);
+        segmentationRafRef.current = null;
+      }
+      
+      // Show original video stream
+      console.log("Showing original video stream...");
+      videoElement.classList.remove('hidden');
+      canvasElement.classList.add('hidden');
+      
+      // Clear canvas when hidden
+      const canvasCtx = canvasElement.getContext('2d');
+      if (canvasCtx) {
+        canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
       }
     }
-  }, [sendMessage, calculateFPS]); // Dependencies
 
-  // --- Control Functions ---
+    // Cleanup function
+    return () => {
+      if (segmentationRafRef.current) {
+        cancelAnimationFrame(segmentationRafRef.current);
+        segmentationRafRef.current = null;
+      }
+      if (videoElement && canvasElement) {
+        videoElement.classList.remove('hidden');
+        canvasElement.classList.add('hidden');
+      }
+    };
+  }, [isViewing, applyBlur, isSegmentationReady, segmentationLoop]);
+
+  // Wrappers for UI state service functions
   const startBroadcasting = useCallback(() => {
-    if (isBroadcasting || isViewing) return; // Prevent starting if already active
-    console.log("Start Broadcasting clicked.");
-    setIsBroadcasting(true);
-    setIsViewing(false);
-    sendMessage({ type: 'broadcaster' });
-    createPeerConnection(true);
-  }, [isBroadcasting, isViewing, sendMessage, createPeerConnection]);
+    uiStartBroadcasting(sendMessage, createPeerConnection);
+  }, [uiStartBroadcasting, sendMessage, createPeerConnection]);
 
   const startViewing = useCallback(() => {
-    if (isBroadcasting || isViewing) return; // Prevent starting if already active
-    console.log("Start Viewing clicked.");
-    setIsBroadcasting(false);
-    setIsViewing(true);
-    // PeerConnection is created when the 'offer' arrives
-    sendMessage({ type: 'viewer' });
-  }, [isBroadcasting, isViewing, sendMessage]);
+    uiStartViewing(sendMessage);
+  }, [uiStartViewing, sendMessage]);
 
-  // --- Enhanced Stop Streaming Function ---
   const stopStreaming = useCallback(() => {
-    // Return early if cleanup is already in progress
-    if (cleanupInProgressRef.current) {
-      console.log("Cleanup already in progress, ignoring duplicate stopStreaming call.");
-      return;
-    }
-    
-    // Set cleanup flag to prevent multiple simultaneous cleanup attempts
-    cleanupInProgressRef.current = true;
-    console.log("Stop Streaming called.");
-
-    // Send stop signal if broadcasting
-    if (isBroadcasting && fpsStateRef.current.myId) {
-      console.log("Sending 'stop' signal to peer:", fpsStateRef.current.myId);
-      sendMessage({ type: 'stop', target: fpsStateRef.current.myId });
-    } else if (isBroadcasting) {
-        console.warn("Stop clicked (broadcaster), but no peer ID known.");
-        // Consider a general stop message if server supports broadcast
-        // sendMessage({ type: 'stop' });
-    }
-
-    fpsStateRef.current.streamActive = false;
-    fpsStateRef.current.isCalculatingFPS = false;
-    fpsStateRef.current.myId = null; // Clear peer ID
-    setIsBroadcasting(false);
-    setIsViewing(false);
-    setFps(0);
-    setApplyBlur(false);
-
-    // Stop segmentation loop explicitly if running
-    if (segmentationRafRef.current) {
-      cancelAnimationFrame(segmentationRafRef.current);
-      segmentationRafRef.current = null;
-    }
-
-    // Cancel FPS calculation loop
-    if (rafRef.current) {
-      cancelAnimationFrame(rafRef.current);
-      rafRef.current = null;
-      console.log("Cancelled requestAnimationFrame.");
-    }
-
-    // Stop local media tracks
-    if (localStreamRef.current) {
-      console.log("Stopping local video tracks.");
-      localStreamRef.current.getTracks().forEach(track => track.stop());
-      localStreamRef.current = null;
-    }
-
-    // Close PeerConnection
-    if (pcRef.current) {
-      console.log("Closing PeerConnection.");
-      pcRef.current.onicecandidate = null;
-      pcRef.current.ontrack = null;
-      pcRef.current.onconnectionstatechange = null;
-      pcRef.current.close();
-      pcRef.current = null;
-    }
-
-    // Clear video display and ensure canvas is hidden
-    if (videoRef.current) {
-      videoRef.current.srcObject = null;
-      videoRef.current.classList.remove('hidden');
-    }
-    if (canvasRef.current) {
-      canvasRef.current.classList.add('hidden');
-      const canvasCtx = canvasRef.current.getContext('2d');
-      if (canvasCtx) {
-        canvasCtx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
-      }
-    }
-
-    console.log("Stream stopped and resources cleaned up.");
-    
-    // Reset cleanup flag when done
-    cleanupInProgressRef.current = false;
-  }, [isBroadcasting, sendMessage]);
+    uiStopStreaming(sendMessage, refs, state);
+  }, [uiStopStreaming, sendMessage, refs, state]);
 
   // --- Render ---
   return (
