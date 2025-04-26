@@ -9,6 +9,7 @@ function App() {
   const [isViewing, setIsViewing] = useState(false);
   const [applyBlur, setApplyBlur] = useState(false);
   const [isSegmentationReady, setIsSegmentationReady] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState('disconnected'); // New state for connection status
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const wsRef = useRef(null);
@@ -17,6 +18,9 @@ function App() {
   const rafRef = useRef(null);
   const segmentationRafRef = useRef(null);
   const bodyPixModelRef = useRef(null);
+  const modelLoadingPromiseRef = useRef(null); // Ref to track model loading promise
+  const cleanupInProgressRef = useRef(false); // Ref to prevent multiple cleanup calls
+  const wsRetryTimeoutRef = useRef(null); // Ref for retry timeout
   const fpsStateRef = useRef({
     frameCount: 0,
     lastFrameTime: 0,
@@ -31,28 +35,40 @@ function App() {
     let isMounted = true;
 
     const loadBodyPixModel = async () => {
+      // If already loading, return the existing promise
+      if (modelLoadingPromiseRef.current) {
+        return modelLoadingPromiseRef.current;
+      }
+      
       try {
         console.log("Loading BodyPix model...");
         // Set backend to WebGL for better performance
         await tf.setBackend('webgl');
-        // Load the model with slightly lower resolution for better performance
-        const model = await bodyPix.load({
+        
+        // Store the promise to prevent duplicate loading
+        modelLoadingPromiseRef.current = bodyPix.load({
           architecture: 'MobileNetV1',
           outputStride: 16,
           multiplier: 0.75,
           quantBytes: 2
         });
         
+        const model = await modelLoadingPromiseRef.current;
+        
         if (isMounted) {
           bodyPixModelRef.current = model;
           setIsSegmentationReady(true);
           console.log("BodyPix model loaded and ready");
         }
+        return model;
       } catch (error) {
         console.error("Failed to load BodyPix model:", error);
         if (isMounted) {
           setIsSegmentationReady(false);
         }
+        // Clear the promise reference on error
+        modelLoadingPromiseRef.current = null;
+        throw error;
       }
     };
 
@@ -66,7 +82,9 @@ function App() {
     };
   }, []);
 
-  // --- Segmentation Processing Loop ---
+  // Rest of the component remains the same until WebSocket connection
+  // ...existing code...
+
   const segmentationLoop = useCallback(() => {
     if (!bodyPixModelRef.current || !videoRef.current || !canvasRef.current) {
       segmentationRafRef.current = requestAnimationFrame(segmentationLoop);
@@ -201,135 +219,230 @@ function App() {
     };
   }, [isViewing, applyBlur, isSegmentationReady, segmentationLoop]);
 
-  // --- WebSocket Connection and Handling ---
+  // --- WebSocket Connection with Retry Logic ---
   useEffect(() => {
-    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${wsProtocol}//${window.location.hostname}:8080`; // Assuming server runs on 8080
-    console.log(`Connecting WebSocket to ${wsUrl}`);
-    wsRef.current = new WebSocket(wsUrl);
+    let retryCount = 0;
+    const maxRetries = 5;
+    const baseRetryDelay = 1000; // Start with 1 second delay
+    let isMounted = true; // Track component mount state to prevent setState on unmounted component
+    
+    // Clear any existing retry timeout
+    if (wsRetryTimeoutRef.current) {
+      clearTimeout(wsRetryTimeoutRef.current);
+      wsRetryTimeoutRef.current = null;
+    }
 
-    wsRef.current.onopen = () => {
-      console.log("WebSocket connection established.");
-      // Request ID or handle initial setup if needed
-    };
-
-    wsRef.current.onclose = (event) => {
-      console.log(`WebSocket connection closed: Code=${event.code}, Reason=${event.reason}`);
-      stopStreaming(); // Clean up on close
-    };
-
-    wsRef.current.onerror = (error) => {
-      console.error("WebSocket error:", error);
-      stopStreaming(); // Clean up on error
-    };
-
-    wsRef.current.onmessage = async (event) => {
+    // Check server status before connecting WebSocket
+    const checkServerAndConnect = async () => {
+      if (!isMounted) return; // Skip if component unmounted
+      
       try {
-        const msg = JSON.parse(event.data);
-        console.log("WebSocket message received:", msg);
-
-        switch (msg.type) {
-          case 'your-id':
-            fpsStateRef.current.myId = msg.id;
-            console.log("Received my ID from server:", msg.id);
-            break;
-
-          case 'viewer': // Received by broadcaster
-            console.log("Broadcaster received 'viewer' request from:", msg.from);
-            if (pcRef.current) {
-              fpsStateRef.current.myId = msg.from; // Store target viewer's ID
-              try {
-                const offer = await pcRef.current.createOffer();
-                await pcRef.current.setLocalDescription(offer);
-                console.log("Broadcaster sending offer to viewer:", msg.from);
-                sendMessage({ type: 'offer', offer, target: msg.from });
-              } catch (error) {
-                console.error("Error creating/sending offer:", error);
-              }
-            } else {
-              console.error("Broadcaster PC not initialized when viewer connected.");
-            }
-            break;
-
-          case 'offer': // Received by viewer
-            console.log("Viewer received 'offer' from:", msg.from);
-            fpsStateRef.current.myId = msg.from; // Store broadcaster's ID
-            if (!pcRef.current) {
-              createPeerConnection(false); // Create viewer PC
-            }
-            if (pcRef.current) {
-              try {
-                await pcRef.current.setRemoteDescription(new RTCSessionDescription(msg.offer));
-                const answer = await pcRef.current.createAnswer();
-                await pcRef.current.setLocalDescription(answer);
-                console.log("Viewer sending answer to broadcaster:", msg.from);
-                sendMessage({ type: 'answer', answer, target: msg.from });
-              } catch (error) {
-                console.error("Error handling offer:", error);
-              }
-            } else {
-                 console.error("Viewer PC could not be initialized for offer.");
-            }
-            break;
-
-          case 'answer': // Received by broadcaster
-            console.log("Broadcaster received 'answer' from:", msg.from);
-            if (pcRef.current && pcRef.current.signalingState !== 'closed') {
-              try {
-                await pcRef.current.setRemoteDescription(new RTCSessionDescription(msg.answer));
-                console.log("Broadcaster set remote description (answer).");
-              } catch (error) {
-                console.error("Error setting remote description (answer):", error);
-              }
-            } else {
-              console.warn("Received answer but PC is closed or doesn't exist.");
-            }
-            break;
-
-          case 'candidate': // Received by both
-            console.log("Received ICE candidate from:", msg.from);
-            if (pcRef.current && pcRef.current.signalingState !== 'closed') {
-              try {
-                await pcRef.current.addIceCandidate(new RTCIceCandidate(msg.candidate));
-                console.log("Added ICE candidate.");
-              } catch (e) {
-                console.error('Error adding received ICE candidate', e);
-              }
-            } else {
-              console.warn("Received ICE candidate but PC is closed or doesn't exist.");
-            }
-            break;
-
-          case 'stop': // Received by viewer when broadcaster stops
-            console.log("Received 'stop' signal.");
-            stopStreaming(); // Stop video on the receiver side
-            break;
-
-          default:
-            console.log("Unknown message type:", msg.type);
+        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsHost = window.location.hostname === '' ? 'localhost' : window.location.hostname; // Fix for when hostname is empty in local development
+        
+        // Connect WebSocket directly without status check (more reliable)
+        const wsUrl = `${wsProtocol}//${wsHost}:8080`;
+        console.log(`Connecting WebSocket to ${wsUrl} (attempt ${retryCount + 1}/${maxRetries})`);
+        
+        // Close existing connection if any
+        if (wsRef.current) {
+          wsRef.current.close();
+          wsRef.current = null;
         }
+        
+        // Create new WebSocket connection
+        const ws = new WebSocket(wsUrl);
+        wsRef.current = ws;
+        
+        ws.onopen = () => {
+          if (!isMounted) return;
+          console.log("WebSocket connection established.");
+          setConnectionStatus('connected');
+          retryCount = 0; // Reset retry count on success
+        };
+        
+        ws.onclose = (event) => {
+          if (!isMounted) return;
+          console.log(`WebSocket connection closed: Code=${event.code}, Reason=${event.reason}`);
+          setConnectionStatus('disconnected');
+          
+          // Don't retry if we deliberately closed the connection (code 1000) or during cleanup
+          if (event.code !== 1000 && !cleanupInProgressRef.current && isMounted) {
+            if (retryCount < maxRetries) {
+              retryCount++;
+              const retryDelay = baseRetryDelay * Math.pow(1.5, retryCount);
+              console.log(`Retrying connection in ${retryDelay}ms... (attempt ${retryCount + 1}/${maxRetries})`);
+              wsRetryTimeoutRef.current = setTimeout(checkServerAndConnect, retryDelay);
+            } else {
+              console.log("Max retries reached. Stopping connection attempts.");
+              // Don't call stopStreaming here, just log the failure
+            }
+          } else {
+            console.log("WebSocket was closed normally or during cleanup, not retrying.");
+          }
+        };
+        
+        ws.onerror = (error) => {
+          if (!isMounted) return;
+          console.error("WebSocket error:", error);
+          setConnectionStatus('error');
+          // No need to handle error further - onclose will be called after onerror
+        };
+        
+        ws.onmessage = async (event) => {
+          if (!isMounted) return;
+          
+          try {
+            const msg = JSON.parse(event.data);
+            console.log("Received message:", msg.type);
+            
+            switch (msg.type) {
+              case 'your-id':
+                fpsStateRef.current.myId = msg.id;
+                console.log("Received my ID from server:", msg.id);
+                break;
+                
+              case 'viewer': // Received by broadcaster
+                console.log("Broadcaster received 'viewer' request from:", msg.from);
+                if (pcRef.current) {
+                  fpsStateRef.current.myId = msg.from; // Store target viewer's ID
+                  try {
+                    const offer = await pcRef.current.createOffer();
+                    await pcRef.current.setLocalDescription(offer);
+                    console.log("Broadcaster sending offer to viewer:", msg.from);
+                    sendMessage({ type: 'offer', offer, target: msg.from });
+                  } catch (error) {
+                    console.error("Error creating/sending offer:", error);
+                  }
+                } else {
+                  console.error("Broadcaster PC not initialized when viewer connected.");
+                }
+                break;
+                
+              case 'offer': // Received by viewer
+                console.log("Viewer received 'offer' from:", msg.from);
+                fpsStateRef.current.myId = msg.from; // Store broadcaster's ID
+                if (!pcRef.current) {
+                  createPeerConnection(false); // Create viewer PC
+                }
+                if (pcRef.current) {
+                  try {
+                    await pcRef.current.setRemoteDescription(new RTCSessionDescription(msg.offer));
+                    const answer = await pcRef.current.createAnswer();
+                    await pcRef.current.setLocalDescription(answer);
+                    console.log("Viewer sending answer to broadcaster:", msg.from);
+                    sendMessage({ type: 'answer', answer, target: msg.from });
+                  } catch (error) {
+                    console.error("Error handling offer:", error);
+                  }
+                } else {
+                  console.error("Viewer PC could not be initialized for offer.");
+                }
+                break;
+                
+              case 'answer': // Received by broadcaster
+                console.log("Broadcaster received 'answer' from:", msg.from);
+                if (pcRef.current && pcRef.current.signalingState !== 'closed') {
+                  try {
+                    await pcRef.current.setRemoteDescription(new RTCSessionDescription(msg.answer));
+                    console.log("Broadcaster set remote description (answer).");
+                  } catch (error) {
+                    console.error("Error setting remote description (answer):", error);
+                  }
+                } else {
+                  console.warn("Received answer but PC is closed or doesn't exist.");
+                }
+                break;
+                
+              case 'candidate': // Received by both
+                console.log("Received ICE candidate from:", msg.from);
+                if (pcRef.current && pcRef.current.signalingState !== 'closed') {
+                  try {
+                    await pcRef.current.addIceCandidate(new RTCIceCandidate(msg.candidate));
+                    console.log("Added ICE candidate.");
+                  } catch (e) {
+                    console.error('Error adding received ICE candidate', e);
+                  }
+                } else {
+                  console.warn("Received ICE candidate but PC is closed or doesn't exist.");
+                }
+                break;
+                
+              case 'stop': // Received by viewer when broadcaster stops
+                console.log("Received 'stop' signal.");
+                stopStreaming(); // Stop video on the receiver side
+                break;
+                
+              default:
+                console.log("Unknown message type:", msg.type);
+            }
+          } catch (error) {
+            console.error("Failed to parse WebSocket message or handle:", error);
+          }
+        };
       } catch (error) {
-        console.error("Failed to parse WebSocket message or handle:", error);
+        if (!isMounted) return;
+        
+        console.error("Error in WebSocket connection setup:", error);
+        if (retryCount < maxRetries) {
+          retryCount++;
+          const retryDelay = baseRetryDelay * Math.pow(1.5, retryCount);
+          console.log(`Error connecting, retrying in ${retryDelay}ms... (attempt ${retryCount + 1}/${maxRetries})`);
+          wsRetryTimeoutRef.current = setTimeout(checkServerAndConnect, retryDelay);
+        } else {
+          console.log("Max retries reached. Stopping connection attempts.");
+          // Don't call stopStreaming here as it may cause cascading issues
+        }
       }
     };
-
+    
+    // Start the connection process
+    checkServerAndConnect();
+    
     // Cleanup function
     return () => {
-      console.log("Cleaning up WebSocket connection.");
-      if (wsRef.current) {
-        wsRef.current.close();
+      console.log("Cleaning up WebSocket connection on unmount.");
+      isMounted = false; // Mark component as unmounted
+      
+      if (wsRetryTimeoutRef.current) {
+        clearTimeout(wsRetryTimeoutRef.current);
+        wsRetryTimeoutRef.current = null;
       }
-      stopStreaming(); // Ensure cleanup on component unmount
+      
+      if (wsRef.current) {
+        // Only attempt to close if in OPEN or CONNECTING state
+        if (wsRef.current.readyState === WebSocket.OPEN || 
+            wsRef.current.readyState === WebSocket.CONNECTING) {
+          wsRef.current.close(1000, "Component unmounted");
+        }
+        wsRef.current = null;
+      }
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // Empty dependency array ensures this runs only once on mount
 
   // --- Helper to send WebSocket messages ---
   const sendMessage = useCallback((message) => {
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify(message));
+    if (!wsRef.current) {
+      console.warn("Cannot send message: WebSocket not initialized", message);
+      return false;
+    }
+
+    if (wsRef.current.readyState === WebSocket.OPEN) {
+      try {
+        wsRef.current.send(JSON.stringify(message));
+        return true;
+      } catch (error) {
+        console.error("Error sending WebSocket message:", error);
+        return false;
+      }
     } else {
-      console.error("WebSocket is not open. Cannot send message:", message);
+      console.warn(`WebSocket not ready (state: ${
+        wsRef.current.readyState === WebSocket.CONNECTING ? 'CONNECTING' :
+        wsRef.current.readyState === WebSocket.CLOSING ? 'CLOSING' :
+        wsRef.current.readyState === WebSocket.CLOSED ? 'CLOSED' : 'UNKNOWN'
+      }). Message not sent:`, message);
+      return false;
     }
   }, []);
 
@@ -462,7 +575,16 @@ function App() {
     sendMessage({ type: 'viewer' });
   }, [isBroadcasting, isViewing, sendMessage]);
 
+  // --- Enhanced Stop Streaming Function ---
   const stopStreaming = useCallback(() => {
+    // Return early if cleanup is already in progress
+    if (cleanupInProgressRef.current) {
+      console.log("Cleanup already in progress, ignoring duplicate stopStreaming call.");
+      return;
+    }
+    
+    // Set cleanup flag to prevent multiple simultaneous cleanup attempts
+    cleanupInProgressRef.current = true;
     console.log("Stop Streaming called.");
 
     // Send stop signal if broadcasting
@@ -527,6 +649,9 @@ function App() {
     }
 
     console.log("Stream stopped and resources cleaned up.");
+    
+    // Reset cleanup flag when done
+    cleanupInProgressRef.current = false;
   }, [isBroadcasting, sendMessage]);
 
   // --- Render ---
