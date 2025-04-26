@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useCallback, useState } from 'react';
+import React, { useRef, useEffect, useCallback, useMemo } from 'react';
 import useUIState from './services/uiStateService';
 import useFPSMonitor from './services/fpsMonitorService';
 import useBodyPixSegmentation from './services/bodyPixService';
@@ -22,7 +22,7 @@ function App() {
     isBroadcasting,
     isViewing,
     applyBlur,
-    setApplyBlur,
+    // setApplyBlur is not used directly, but through toggleBlur
     isSegmentationReady,
     setIsSegmentationReady,
     connectionStatus,
@@ -53,24 +53,24 @@ function App() {
   // Use the WebSocket Communication Service
   const {
     wsRef,
-    wsRetryTimeoutRef,
+    // wsRetryTimeoutRef is not used directly
     sendMessage,
     initializeWebSocketConnection
   } = useWebSocketCommunication(setConnectionStatus, cleanupInProgressRef);
 
-  // Create a refs object to pass to services
-  const refs = {
+  // Create a refs object to pass to services using useMemo to prevent recreation on every render
+  const refs = useMemo(() => ({
     videoRef,
     canvasRef,
     wsRef,
     rafRef,
     segmentationRafRef
-  };
+  }), [videoRef, canvasRef, wsRef, rafRef, segmentationRafRef]);
 
-  // Create a state object to pass to services
-  const state = {
+  // Create a state object to pass to services using useMemo
+  const state = useMemo(() => ({
     fpsStateRef
-  };
+  }), [fpsStateRef]);
 
   // Message handler for WebSocket messages - define this before WebRTC service
   const handleWebSocketMessage = useCallback((msg) => {

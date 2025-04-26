@@ -46,7 +46,7 @@ export const useUIState = (videoVisualization) => {
   /**
    * Stops streaming (both broadcasting and viewing)
    * @param {Function} sendMessage - Function to send WebSocket messages
-   * @param {Object} refs - Object containing references (segmentationRafRef, rafRef, localStreamRef, pcRef, videoRef, canvasRef)
+   * @param {Object} refs - Object containing references (segmentationRafRef, rafRef, localStreamRef, peerConnectionsRef, videoRef, canvasRef)
    * @param {Object} state - Object containing state (fpsStateRef)
    */
   const stopStreaming = useCallback((sendMessage, refs, state) => {
@@ -79,13 +79,13 @@ export const useUIState = (videoVisualization) => {
     setApplyBlur(false);
 
     // Stop segmentation loop explicitly if running
-    if (refs.segmentationRafRef.current) {
+    if (refs.segmentationRafRef && refs.segmentationRafRef.current) {
       cancelAnimationFrame(refs.segmentationRafRef.current);
       refs.segmentationRafRef.current = null;
     }
 
     // Cancel FPS calculation loop
-    if (refs.rafRef.current) {
+    if (refs.rafRef && refs.rafRef.current) {
       cancelAnimationFrame(refs.rafRef.current);
       refs.rafRef.current = null;
       console.log("Cancelled requestAnimationFrame.");
@@ -97,18 +97,18 @@ export const useUIState = (videoVisualization) => {
     } else {
       // Legacy direct DOM manipulation
       // Stop local media tracks
-      if (refs.localStreamRef.current) {
+      if (refs.localStreamRef && refs.localStreamRef.current) {
         console.log("Stopping local video tracks.");
         refs.localStreamRef.current.getTracks().forEach(track => track.stop());
         refs.localStreamRef.current = null;
       }
 
       // Clear video display and ensure canvas is hidden
-      if (refs.videoRef.current) {
+      if (refs.videoRef && refs.videoRef.current) {
         refs.videoRef.current.srcObject = null;
         refs.videoRef.current.classList.remove('hidden');
       }
-      if (refs.canvasRef.current) {
+      if (refs.canvasRef && refs.canvasRef.current) {
         refs.canvasRef.current.classList.add('hidden');
         const canvasCtx = refs.canvasRef.current.getContext('2d');
         if (canvasCtx) {
@@ -118,13 +118,18 @@ export const useUIState = (videoVisualization) => {
     }
 
     // Close PeerConnection
-    if (refs.pcRef.current) {
+    if (refs.pcRef && refs.pcRef.current) {
       console.log("Closing PeerConnection.");
       refs.pcRef.current.onicecandidate = null;
       refs.pcRef.current.ontrack = null;
       refs.pcRef.current.onconnectionstatechange = null;
       refs.pcRef.current.close();
       refs.pcRef.current = null;
+    }
+    // Handle multiple peer connections (for multi-viewer setup)
+    else if (refs.peerConnectionsRef && refs.peerConnectionsRef.current) {
+      console.log("Closing all peer connections.");
+      // The actual cleanup is handled by the webrtcService's cleanupConnection function
     }
 
     console.log("Stream stopped and resources cleaned up.");

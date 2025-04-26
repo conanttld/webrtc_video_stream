@@ -228,7 +228,7 @@ export const useWebRTCConnection = (sendMessage, fpsStateRef, startMonitoring, v
     } catch (error) {
       console.error(`Error in createAndSendOffer for ${targetId}:`, error);
     }
-  }, [sendMessage, createPeerConnection]);
+  }, [sendMessage, createPeerConnection, setupBroadcasterMedia]);
 
   /**
    * Handles receiving and processing an offer from a remote peer
@@ -318,7 +318,7 @@ export const useWebRTCConnection = (sendMessage, fpsStateRef, startMonitoring, v
     } catch (error) {
       console.error(`Error setting remote description (answer) for ${peerId}:`, error);
     }
-  }, []);
+  }, [fpsStateRef]);
 
   /**
    * Handles a received ICE candidate from a remote peer
