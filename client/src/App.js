@@ -73,7 +73,9 @@ function App() {
   }), [fpsStateRef]);
 
   // Message handler for WebSocket messages - define this before WebRTC service
-  const handleWebSocketMessage = useCallback((msg) => {
+  // This handler is no longer used directly, as we use fullMessageHandler instead
+  // Using useRef to avoid dependency issues with fullMessageHandler
+  const handleWebSocketMessageRef = useRef((msg) => {
     console.log("Received message:", msg.type);
     
     switch (msg.type) {
@@ -90,6 +92,16 @@ function App() {
         // Don't process other message types here - will be handled after setup
         break;
     }
+  });
+
+  // Update the handler when setPeerId changes
+  useEffect(() => {
+    handleWebSocketMessageRef.current = (msg) => {
+      if (msg.type === 'your-id') {
+        setPeerId(msg.id);
+        console.log("Received my ID from server:", msg.id);
+      }
+    };
   }, [setPeerId]);
 
   // Use the WebRTC Connection Service with videoVisualization
@@ -178,15 +190,16 @@ function App() {
     // Initialize the WebSocket connection with the message handler
     initializeWebSocketConnection(fullMessageHandler);
     
+    // Capture the current websocket reference for cleanup
+    const currentWs = wsRef.current;
+    
     // Return a cleanup function
     return () => {
       console.log("App component unmounting, performing cleanup");
-      if (wsRef.current) {
+      if (currentWs) {
         console.log("Cleaning up WebSocket connection...");
       }
     };
-  // Add fullMessageHandler as a dependency to ensure it has the latest references
-  // but wrap it in a useCallback with all required dependencies to prevent frequent changes
   }, [initializeWebSocketConnection, fullMessageHandler, wsRef]);
 
   // --- Apply/Remove Blur Effect (controls segmentation) ---

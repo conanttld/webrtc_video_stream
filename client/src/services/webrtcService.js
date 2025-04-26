@@ -15,6 +15,54 @@ export const useWebRTCConnection = (sendMessage, fpsStateRef, startMonitoring, v
   const pendingIceCandidatesRef = useRef(new Map()); // peerId => [candidates]
 
   /**
+   * Sets up broadcaster's media (camera) and adds tracks to the peer connection
+   */
+  const setupBroadcasterMedia = useCallback(async (refs, stopStreaming) => {
+    console.log('Requesting user media...');
+    try {
+      if (localStreamRef.current) {
+        console.log('Reusing existing localStream');
+        return localStreamRef.current;
+      }
+      
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        video: { 
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+          frameRate: { ideal: 30 }
+        }, 
+        audio: false 
+      });
+      console.log('getUserMedia success!');
+      
+      // Use the videoVisualization service to handle the local stream
+      if (videoVisualization) {
+        videoVisualization.attachVideoStream(stream, true);
+        // Set up canvas dimensions once video has metadata
+        videoVisualization.videoRef.current.onloadedmetadata = () => {
+          videoVisualization.setupCanvas();
+        };
+      } else if (refs.videoRef.current) {
+        // Fallback to direct video element manipulation if visualization service not available
+        refs.videoRef.current.srcObject = stream;
+      }
+      
+      localStreamRef.current = stream;
+      fpsStateRef.current.streamActive = true;
+
+      // Start FPS calculation for broadcaster
+      startMonitoring();
+      
+      return stream;
+    } catch (err) {
+      console.error('getUserMedia error:', err);
+      alert('Could not access webcam. Please check permissions.');
+      stopStreaming(); // Clean up if getUserMedia fails
+      return null;
+    }
+  }, [videoVisualization, startMonitoring, fpsStateRef]);
+
+  /**
    * Creates a new RTCPeerConnection for specific viewer
    * @param {boolean} isBroadcaster - Whether the client is the broadcaster
    * @param {Object} refs - Object containing references (videoRef)
@@ -136,55 +184,7 @@ export const useWebRTCConnection = (sendMessage, fpsStateRef, startMonitoring, v
     }
 
     return pc;
-  }, [sendMessage, fpsStateRef, startMonitoring, videoVisualization]);
-
-  /**
-   * Sets up broadcaster's media (camera) and adds tracks to the peer connection
-   */
-  const setupBroadcasterMedia = useCallback(async (refs, stopStreaming) => {
-    console.log('Requesting user media...');
-    try {
-      if (localStreamRef.current) {
-        console.log('Reusing existing localStream');
-        return localStreamRef.current;
-      }
-      
-      const stream = await navigator.mediaDevices.getUserMedia({ 
-        video: { 
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-          frameRate: { ideal: 30 }
-        }, 
-        audio: false 
-      });
-      console.log('getUserMedia success!');
-      
-      // Use the videoVisualization service to handle the local stream
-      if (videoVisualization) {
-        videoVisualization.attachVideoStream(stream, true);
-        // Set up canvas dimensions once video has metadata
-        videoVisualization.videoRef.current.onloadedmetadata = () => {
-          videoVisualization.setupCanvas();
-        };
-      } else if (refs.videoRef.current) {
-        // Fallback to direct video element manipulation if visualization service not available
-        refs.videoRef.current.srcObject = stream;
-      }
-      
-      localStreamRef.current = stream;
-      fpsStateRef.current.streamActive = true;
-
-      // Start FPS calculation for broadcaster
-      startMonitoring();
-      
-      return stream;
-    } catch (err) {
-      console.error('getUserMedia error:', err);
-      alert('Could not access webcam. Please check permissions.');
-      stopStreaming(); // Clean up if getUserMedia fails
-      return null;
-    }
-  }, [videoVisualization, startMonitoring]);
+  }, [sendMessage, fpsStateRef, startMonitoring, videoVisualization, setupBroadcasterMedia]);
 
   /**
    * Creates and sends an offer to a specific viewer
@@ -228,7 +228,7 @@ export const useWebRTCConnection = (sendMessage, fpsStateRef, startMonitoring, v
     } catch (error) {
       console.error(`Error in createAndSendOffer for ${targetId}:`, error);
     }
-  }, [sendMessage, createPeerConnection, setupBroadcasterMedia]);
+  }, [sendMessage, createPeerConnection]);
 
   /**
    * Handles receiving and processing an offer from a remote peer
@@ -318,7 +318,7 @@ export const useWebRTCConnection = (sendMessage, fpsStateRef, startMonitoring, v
     } catch (error) {
       console.error(`Error setting remote description (answer) for ${peerId}:`, error);
     }
-  }, [fpsStateRef]);
+  }, []);
 
   /**
    * Handles a received ICE candidate from a remote peer
