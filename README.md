@@ -35,11 +35,14 @@ This application is a real-time video streaming platform built with WebRTC, Reac
    - Video display area (shows webcam feed or received stream)
    - Background blur toggle option (for viewers)
    - FPS (Frames Per Second) counter
+   - **Connection status indicator** with visual feedback
 
 2. **WebRTC Connection Management**
    - `RTCPeerConnection` setup and configuration
    - ICE candidate gathering and exchange
    - SDP (Session Description Protocol) offer/answer exchange
+   - **Robust connection retry logic with exponential backoff**
+   - **Connection state management and visualization**
 
 3. **Video Processing**
    - Raw webcam feed capture
@@ -54,12 +57,17 @@ The client application maintains several states:
 - `applyBlur`: Controls whether background blur is applied to the video
 - `isSegmentationReady`: Tracks if the BodyPix model is loaded and ready
 - `fps`: Tracks the current frames per second rate of the video
+- **`connectionStatus`**: Tracks the current WebSocket connection status (connected, connecting, disconnected, error)
 
 ### Process Flow
 
 #### Initialization
 1. The application loads and establishes a WebSocket connection to the signaling server
+   - **Connection status changes to "connecting"**
+   - **WebSocket connection attempts employ retry logic with exponential backoff**
+   - **UI provides visual feedback during connection process**
 2. The BodyPix ML model is loaded asynchronously in the background
+3. **Once connected, the status indicator turns green and streaming options become available**
 
 #### When Broadcasting
 1. User clicks "Start Broadcasting"
@@ -126,6 +134,8 @@ The server processes several types of WebSocket messages:
 
 - When clients disconnect, they are removed from the client map
 - If the broadcaster disconnects, all viewers are notified with a `stop` message
+- **Server maintains a readiness state to prevent premature connections**
+- **Server provides a status endpoint for clients to check availability**
 
 ## Signal and Data Flow
 
@@ -205,6 +215,33 @@ P2P Stream → Video Element → BodyPix Segmentation → Canvas → Display
    - Proper cleanup of media tracks and connections on stop
    - Memory management through reference cleanup
 
+## Connection Reliability Improvements
+
+1. **Robust WebSocket Connection Management**
+   - Implemented connection retry logic with exponential backoff
+   - Added proper handling of connection state transitions
+   - Improved error handling for WebSocket operations
+   - Proper component lifecycle management to prevent memory leaks
+
+2. **Server Readiness Protocol**
+   - Server indicates when it's fully initialized and ready to accept connections
+   - Status endpoint allows clients to check server availability
+   - Prevents connection attempts to a server that's not ready
+
+3. **User Experience Enhancements**
+   - Visual connection status indicator with color coding:
+     - Green: Connected and ready
+     - Yellow: Connecting/reconnecting
+     - Red: Disconnected
+     - Purple: Connection error
+   - Broadcasting and viewing options automatically disable when not connected
+   - Clear feedback during connection attempts and failures
+
+4. **Resource Management**
+   - Prevention of redundant cleanup operations
+   - Better handling of connection errors without cascading failures
+   - Improved synchronization between BodyPix model and connection lifecycle
+
 ## Security Considerations
 
 1. The application uses client-generated UUIDs for identifying peers
@@ -221,4 +258,4 @@ P2P Stream → Video Element → BodyPix Segmentation → Canvas → Display
 
 ## Conclusion
 
-This WebRTC application demonstrates a complete implementation of real-time video streaming with optional ML-based video processing. The combination of WebSockets for signaling and WebRTC for media transport creates a scalable and efficient architecture where the server's role is minimized once connections are established.
+This WebRTC application demonstrates a complete implementation of real-time video streaming with optional ML-based video processing. The combination of WebSockets for signaling and WebRTC for media transport creates a scalable and efficient architecture where the server's role is minimized once connections are established. **The improved connection handling ensures a more reliable user experience, with transparent feedback about the application's connection state.**
