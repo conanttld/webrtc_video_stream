@@ -2,6 +2,7 @@ import React, { useRef, useEffect, useCallback } from 'react';
 import * as bodyPix from '@tensorflow-models/body-pix';
 import * as tf from '@tensorflow/tfjs';
 import useUIState from './services/uiStateService';
+import useFPSMonitor from './services/fpsMonitorService';
 import './App.css';
 
 function App() {
@@ -23,25 +24,25 @@ function App() {
     stopStreaming: uiStopStreaming
   } = useUIState();
 
+  // Use the FPS Monitoring Service
+  const {
+    startMonitoring,
+    stopMonitoring,
+    setPeerId,
+    rafRef,
+    fpsStateRef
+  } = useFPSMonitor(setFps);
+
   // Refs that were previously defined in App component
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const wsRef = useRef(null);
   const pcRef = useRef(null);
   const localStreamRef = useRef(null);
-  const rafRef = useRef(null);
   const segmentationRafRef = useRef(null);
   const bodyPixModelRef = useRef(null);
   const modelLoadingPromiseRef = useRef(null);
   const wsRetryTimeoutRef = useRef(null);
-  const fpsStateRef = useRef({
-    frameCount: 0,
-    lastFrameTime: 0,
-    lastFrameReceivedTime: 0,
-    isCalculatingFPS: false,
-    streamActive: false,
-    myId: null
-  });
 
   // Create a refs object to pass to the UI state service
   const refs = {
@@ -58,6 +59,109 @@ function App() {
   const state = {
     fpsStateRef
   };
+
+  // --- Helper to send WebSocket messages ---
+  const sendMessage = useCallback((message) => {
+    if (!wsRef.current) {
+      console.warn("Cannot send message: WebSocket not initialized", message);
+      return false;
+    }
+
+    if (wsRef.current.readyState === WebSocket.OPEN) {
+      try {
+        wsRef.current.send(JSON.stringify(message));
+        return true;
+      } catch (error) {
+        console.error("Error sending WebSocket message:", error);
+        return false;
+      }
+    } else {
+      console.warn(`WebSocket not ready (state: ${
+        wsRef.current.readyState === WebSocket.CONNECTING ? 'CONNECTING' :
+        wsRef.current.readyState === WebSocket.CLOSING ? 'CLOSING' :
+        wsRef.current.readyState === WebSocket.CLOSED ? 'CLOSED' : 'UNKNOWN'
+      }). Message not sent:`, message);
+      return false;
+    }
+  }, []);
+
+  // Define stopStreaming before it's used in createPeerConnection
+  const stopStreaming = useCallback(() => {
+    stopMonitoring(); // Stop FPS monitoring
+    uiStopStreaming(sendMessage, refs, state);
+  }, [uiStopStreaming, sendMessage, refs, state, stopMonitoring]);
+
+  // --- Peer Connection Setup ---
+  const createPeerConnection = useCallback(async (isBroadcaster) => {
+    if (pcRef.current) {
+      console.log("Closing existing PeerConnection");
+      pcRef.current.close();
+    }
+    console.log("Creating new PeerConnection. isBroadcaster:", isBroadcaster);
+    pcRef.current = new RTCPeerConnection();
+
+    pcRef.current.onicecandidate = ({ candidate }) => {
+      if (candidate && fpsStateRef.current.myId) { // Ensure we have a target ID
+        console.log("Sending ICE candidate to:", fpsStateRef.current.myId);
+        sendMessage({ type: 'candidate', candidate, target: fpsStateRef.current.myId });
+      } else if (candidate) {
+          console.warn("No target ID found for ICE candidate.");
+      }
+    };
+
+    pcRef.current.ontrack = (event) => {
+      console.log("pc.ontrack event received.");
+      if (videoRef.current) {
+        videoRef.current.srcObject = event.streams[0];
+      }
+
+      // Start FPS calculation for the VIEWER
+      if (!isBroadcaster) {
+        console.log("Viewer received track. Starting FPS calculation.");
+        startMonitoring();
+      }
+    };
+
+    pcRef.current.onconnectionstatechange = () => {
+        if (pcRef.current) {
+            console.log("PeerConnection state:", pcRef.current.connectionState);
+            if (pcRef.current.connectionState === 'disconnected' || pcRef.current.connectionState === 'failed' || pcRef.current.connectionState === 'closed') {
+                console.log("PeerConnection disconnected/failed/closed. Cleaning up.");
+                stopStreaming();
+            }
+        }
+    };
+
+    if (isBroadcaster) {
+      console.log('Requesting user media...');
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        console.log('getUserMedia success!');
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+        }
+        localStreamRef.current = stream;
+        fpsStateRef.current.streamActive = true; // Set via startMonitoring
+
+        stream.getTracks().forEach(track => {
+          try {
+            if (pcRef.current) {
+                pcRef.current.addTrack(track, stream);
+            }
+          } catch (error) {
+            console.error("Error adding track:", error);
+          }
+        });
+
+        // Start FPS calculation for broadcaster
+        startMonitoring();
+      } catch (err) {
+        console.error('getUserMedia error:', err);
+        alert('Could not access webcam. Please check permissions.');
+        stopStreaming(); // Clean up if getUserMedia fails
+      }
+    }
+  }, [sendMessage, startMonitoring, stopStreaming]);
 
   // --- Initialize BodyPix Model ---
   useEffect(() => {
@@ -110,141 +214,6 @@ function App() {
       console.log("Cleaning up BodyPix model");
     };
   }, [setIsSegmentationReady]);
-
-  // --- Helper to send WebSocket messages ---
-  const sendMessage = useCallback((message) => {
-    if (!wsRef.current) {
-      console.warn("Cannot send message: WebSocket not initialized", message);
-      return false;
-    }
-
-    if (wsRef.current.readyState === WebSocket.OPEN) {
-      try {
-        wsRef.current.send(JSON.stringify(message));
-        return true;
-      } catch (error) {
-        console.error("Error sending WebSocket message:", error);
-        return false;
-      }
-    } else {
-      console.warn(`WebSocket not ready (state: ${
-        wsRef.current.readyState === WebSocket.CONNECTING ? 'CONNECTING' :
-        wsRef.current.readyState === WebSocket.CLOSING ? 'CLOSING' :
-        wsRef.current.readyState === WebSocket.CLOSED ? 'CLOSED' : 'UNKNOWN'
-      }). Message not sent:`, message);
-      return false;
-    }
-  }, []);
-
-  // --- FPS Calculation ---
-  const calculateFPS = useCallback(() => {
-    if (!fpsStateRef.current.streamActive || !fpsStateRef.current.isCalculatingFPS) {
-      setFps(0);
-      fpsStateRef.current.isCalculatingFPS = false;
-      rafRef.current = null;
-      return;
-    }
-
-    const currentTime = performance.now();
-    const deltaTime = currentTime - fpsStateRef.current.lastFrameTime;
-    fpsStateRef.current.frameCount++;
-
-    if (deltaTime >= 1000) {
-      const calculatedFps = (fpsStateRef.current.frameCount / deltaTime) * 1000;
-      setFps(Math.round(calculatedFps));
-      fpsStateRef.current.frameCount = 0;
-      fpsStateRef.current.lastFrameTime = currentTime;
-    }
-
-    rafRef.current = requestAnimationFrame(calculateFPS);
-  }, [setFps]);
-
-  // --- Peer Connection Setup ---
-  const createPeerConnection = useCallback(async (isBroadcaster) => {
-    if (pcRef.current) {
-      console.log("Closing existing PeerConnection");
-      pcRef.current.close();
-    }
-    console.log("Creating new PeerConnection. isBroadcaster:", isBroadcaster);
-    pcRef.current = new RTCPeerConnection();
-
-    pcRef.current.onicecandidate = ({ candidate }) => {
-      if (candidate && fpsStateRef.current.myId) { // Ensure we have a target ID
-        console.log("Sending ICE candidate to:", fpsStateRef.current.myId);
-        sendMessage({ type: 'candidate', candidate, target: fpsStateRef.current.myId });
-      } else if (candidate) {
-          console.warn("No target ID found for ICE candidate.");
-      }
-    };
-
-    pcRef.current.ontrack = (event) => {
-      console.log("pc.ontrack event received.");
-      if (videoRef.current) {
-        videoRef.current.srcObject = event.streams[0];
-      }
-
-      // Start FPS calculation for the VIEWER
-      if (!isBroadcaster) {
-        console.log("Viewer received track. Starting FPS calculation.");
-        if (!fpsStateRef.current.isCalculatingFPS) {
-          fpsStateRef.current.streamActive = true; // Redundant? Set by isViewing
-          fpsStateRef.current.isCalculatingFPS = true;
-          fpsStateRef.current.frameCount = 0;
-          fpsStateRef.current.lastFrameTime = performance.now();
-          fpsStateRef.current.lastFrameReceivedTime = performance.now(); // Initialize
-          if (rafRef.current) cancelAnimationFrame(rafRef.current);
-          rafRef.current = requestAnimationFrame(calculateFPS);
-        }
-      }
-    };
-
-    pcRef.current.onconnectionstatechange = () => {
-        if (pcRef.current) {
-            console.log("PeerConnection state:", pcRef.current.connectionState);
-            if (pcRef.current.connectionState === 'disconnected' || pcRef.current.connectionState === 'failed' || pcRef.current.connectionState === 'closed') {
-                console.log("PeerConnection disconnected/failed/closed. Cleaning up.");
-                stopStreaming();
-            }
-        }
-    };
-
-    if (isBroadcaster) {
-      console.log('Requesting user media...');
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-        console.log('getUserMedia success!');
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-        }
-        localStreamRef.current = stream;
-        fpsStateRef.current.streamActive = true; // Set via setIsBroadcasting
-
-        stream.getTracks().forEach(track => {
-          try {
-            if (pcRef.current) {
-                pcRef.current.addTrack(track, stream);
-            }
-          } catch (error) {
-            console.error("Error adding track:", error);
-          }
-        });
-
-        // Start FPS calculation for broadcaster
-        if (!fpsStateRef.current.isCalculatingFPS) {
-          console.log('Starting FPS calculation for broadcaster...');
-          fpsStateRef.current.isCalculatingFPS = true;
-          fpsStateRef.current.frameCount = 0;
-          fpsStateRef.current.lastFrameTime = performance.now();
-          if (rafRef.current) cancelAnimationFrame(rafRef.current);
-          rafRef.current = requestAnimationFrame(calculateFPS);
-        }
-      } catch (err) {
-        console.error('getUserMedia error:', err);
-        alert('Could not access webcam. Please check permissions.');
-        stopStreaming(); // Clean up if getUserMedia fails
-      }
-    }
-  }, [sendMessage, calculateFPS]);
 
   // --- WebSocket Connection with Retry Logic ---
   useEffect(() => {
@@ -329,14 +298,14 @@ function App() {
             
             switch (msg.type) {
               case 'your-id':
-                fpsStateRef.current.myId = msg.id;
+                setPeerId(msg.id);
                 console.log("Received my ID from server:", msg.id);
                 break;
                 
               case 'viewer': // Received by broadcaster
                 console.log("Broadcaster received 'viewer' request from:", msg.from);
                 if (pcRef.current) {
-                  fpsStateRef.current.myId = msg.from; // Store target viewer's ID
+                  setPeerId(msg.from); // Store target viewer's ID
                   try {
                     const offer = await pcRef.current.createOffer();
                     await pcRef.current.setLocalDescription(offer);
@@ -352,7 +321,7 @@ function App() {
                 
               case 'offer': // Received by viewer
                 console.log("Viewer received 'offer' from:", msg.from);
-                fpsStateRef.current.myId = msg.from; // Store broadcaster's ID
+                setPeerId(msg.from); // Store broadcaster's ID
                 if (!pcRef.current) {
                   createPeerConnection(false); // Create viewer PC
                 }
@@ -598,10 +567,6 @@ function App() {
   const startViewing = useCallback(() => {
     uiStartViewing(sendMessage);
   }, [uiStartViewing, sendMessage]);
-
-  const stopStreaming = useCallback(() => {
-    uiStopStreaming(sendMessage, refs, state);
-  }, [uiStopStreaming, sendMessage, refs, state]);
 
   // --- Render ---
   return (
