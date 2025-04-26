@@ -127,3 +127,8 @@
 .status-error {
   background-color: #9C27B0; /* Purple */
 }
+
+/* Fix for mirrored video in viewing mode */
+.viewing-mode #video {
+  transform: scaleX(-1); /* Flip the video horizontally */
+}

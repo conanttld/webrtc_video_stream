@@ -270,7 +270,7 @@ function App() {
           </div>
         )}
       </div>
-      <div className="video-container">
+      <div className={`video-container ${isViewing ? 'viewing-mode' : ''}`}>
         <video ref={videoRef} id="video" autoPlay playsInline muted={isBroadcasting}></video>
         <canvas ref={canvasRef} id="canvas" className="hidden"></canvas>
       </div>
