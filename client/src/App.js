@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useCallback } from 'react';
+import React, { useRef, useEffect, useCallback, useState } from 'react';
 import useUIState from './services/uiStateService';
 import useFPSMonitor from './services/fpsMonitorService';
 import useBodyPixSegmentation from './services/bodyPixService';
@@ -83,16 +83,9 @@ function App() {
         break;
         
       case 'viewer': // Other message handlers will be handled after WebRTC service is defined
-        if (pcRef && pcRef.current) {
-          setPeerId(msg.from);
-          createAndSendOffer(msg.from);
-        } else {
-          console.error("Broadcaster PC not initialized when viewer connected.");
-        }
+        // We'll update this handler after WebRTC service is defined
         break;
         
-      // The rest of the message handlers will use functions from WebRTC service
-      // which will be defined below
       default:
         // Don't process other message types here - will be handled after setup
         break;
@@ -101,18 +94,21 @@ function App() {
 
   // Use the WebRTC Connection Service with videoVisualization
   const {
-    pcRef,
+    peerConnectionsRef, // Now using map of connections instead of single pcRef
     localStreamRef,
+    viewerCount, // New state for tracking number of viewers
     createPeerConnection,
     createAndSendOffer,
     handleReceivedOffer,
     handleReceivedAnswer,
     handleReceivedCandidate,
+    handleViewerDisconnected, // New function to handle viewer disconnection
+    updateViewerCount, // New function to update viewer count
     cleanupConnection
   } = useWebRTCConnection(sendMessage, fpsStateRef, startMonitoring, videoVisualization);
 
   // Update refs object with WebRTC refs
-  refs.pcRef = pcRef;
+  refs.peerConnectionsRef = peerConnectionsRef;
   refs.localStreamRef = localStreamRef;
 
   // Define stopStreaming before it's used in createPeerConnection
@@ -135,37 +131,26 @@ function App() {
         
       case 'viewer': // Received by broadcaster
         console.log("Broadcaster received 'viewer' request from:", msg.from);
-        if (pcRef.current) {
-          setPeerId(msg.from); // Store target viewer's ID
-          createAndSendOffer(msg.from);
-        } else {
-          console.error("Broadcaster PC not initialized when viewer connected.");
-        }
+        // Pass the viewer ID and refs object to create a connection for this specific viewer
+        createAndSendOffer(msg.from, refs);
         break;
         
       case 'offer': // Received by viewer
         console.log("Viewer received 'offer' from:", msg.from);
         setPeerId(msg.from); // Store broadcaster's ID
         
-        if (!pcRef.current) {
-          createPeerConnection(false, refs, stopStreaming);
-        }
-        
-        if (pcRef.current) {
-          handleReceivedOffer(msg.offer, msg.from);
-        } else {
-          console.error("Viewer PC could not be initialized for offer.");
-        }
+        // Handle the offer - refs passed to allow proper video setup
+        handleReceivedOffer(msg.offer, msg.from, refs);
         break;
         
       case 'answer': // Received by broadcaster
         console.log("Broadcaster received 'answer' from:", msg.from);
-        handleReceivedAnswer(msg.answer);
+        handleReceivedAnswer(msg.answer, msg.from);
         break;
         
       case 'candidate': // Received by both
         console.log("Received ICE candidate from:", msg.from);
-        handleReceivedCandidate(msg.candidate);
+        handleReceivedCandidate(msg.candidate, msg.from);
         break;
         
       case 'stop': // Received by viewer when broadcaster stops
@@ -173,21 +158,36 @@ function App() {
         stopStreaming(); // Stop video on the receiver side
         break;
         
+      case 'viewer-disconnected': // New message type - received by broadcaster when viewer disconnects
+        console.log(`Viewer disconnected: ${msg.viewerId}, new count: ${msg.viewerCount}`);
+        handleViewerDisconnected(msg.viewerId, msg.viewerCount);
+        break;
+        
+      case 'viewer-count': // New message type - received when viewer count changes
+        console.log(`Updating viewer count to: ${msg.count}`);
+        updateViewerCount(msg.count);
+        break;
+        
       default:
         console.log("Unknown message type:", msg.type);
     }
-  }, [pcRef, setPeerId, createAndSendOffer, createPeerConnection, refs, stopStreaming, handleReceivedOffer, handleReceivedAnswer, handleReceivedCandidate]);
+  }, [setPeerId, createAndSendOffer, refs, handleReceivedOffer, handleReceivedAnswer, handleReceivedCandidate, stopStreaming, handleViewerDisconnected, updateViewerCount]);
 
   // Initialize WebSocket connection once on component mount
   useEffect(() => {
     // Initialize the WebSocket connection with the message handler
-    const cleanup = initializeWebSocketConnection(fullMessageHandler);
+    initializeWebSocketConnection(fullMessageHandler);
     
-    // Return the cleanup function provided by the WebSocket service
-    return cleanup;
+    // Return a cleanup function
+    return () => {
+      console.log("App component unmounting, performing cleanup");
+      if (wsRef.current) {
+        console.log("Cleaning up WebSocket connection...");
+      }
+    };
   // Add fullMessageHandler as a dependency to ensure it has the latest references
   // but wrap it in a useCallback with all required dependencies to prevent frequent changes
-  }, [initializeWebSocketConnection, fullMessageHandler]);
+  }, [initializeWebSocketConnection, fullMessageHandler, wsRef]);
 
   // --- Apply/Remove Blur Effect (controls segmentation) ---
   useEffect(() => {
@@ -216,6 +216,7 @@ function App() {
 
   // Wrapper for startBroadcasting
   const startBroadcasting = useCallback(async () => {
+    // For broadcaster, create the initial peer connection without a specific viewer ID
     await createPeerConnection(true, refs, stopStreaming);
     uiStartBroadcasting(sendMessage, () => {}); // Pass empty function since we already created connection
   }, [uiStartBroadcasting, sendMessage, createPeerConnection, refs, stopStreaming]);
@@ -267,6 +268,12 @@ function App() {
               />
               Apply Background Blur (BodyPix)
             </label>
+          </div>
+        )}
+        {/* Display viewer count for broadcaster */}
+        {isBroadcasting && (
+          <div className="viewer-count">
+            Viewers: {viewerCount}
           </div>
         )}
       </div>
