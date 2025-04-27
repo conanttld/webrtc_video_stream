@@ -13,19 +13,22 @@ This application is a real-time video streaming platform built with WebRTC, Reac
    - Establishes WebRTC peer connections
    - Processes video streams with TensorFlow.js BodyPix for background blur
    - Manages UI states for broadcasting and viewing
-   - **Implements a modular architecture with specialized services**
+   - Implements a modular architecture with specialized service modules
 
 2. **Signaling Server (Node.js)**
    - Facilitates WebRTC connection establishment
    - Manages client connections and roles (broadcaster/viewer)
    - Relays signaling messages between peers
+   - Tracks viewer count and broadcasts updates
+   - Handles connection state changes and reconnections
 
 ### Technologies Used
 
-- **Frontend**: React, WebRTC API
-- **Backend**: Node.js, Express, WebSocket (ws)
-- **Machine Learning**: TensorFlow.js, BodyPix model
+- **Frontend**: React (v19.1.0), WebRTC API
+- **Backend**: Node.js, Express (v5.1.0), WebSocket (ws v8.18.1)
+- **Machine Learning**: TensorFlow.js, BodyPix model (v2.2.1)
 - **Communication**: WebSockets for signaling, WebRTC for media streaming
+- **Development**: Modern JavaScript (ES6+), React Hooks
 
 ## Client-Side Architecture
 
@@ -37,6 +40,7 @@ The client application follows a modular, service-based architecture that separa
    - Manages application state (broadcasting, viewing, blur settings)
    - Centralizes UI-related state changes
    - Provides hooks for component integration
+   - Handles streamlined start/stop operations
 
 2. **FPS Monitoring Service (`fpsMonitorService.js`)**
    - Calculates and tracks frames per second in video streams
@@ -47,16 +51,19 @@ The client application follows a modular, service-based architecture that separa
    - Handles TensorFlow.js and BodyPix model initialization
    - Performs background blur processing via segmentation
    - Manages canvas rendering and video processing
+   - Optimizes performance with WebGL acceleration
 
 4. **WebRTC Connection Service (`webrtcService.js`)**
-   - Manages WebRTC peer connections
+   - Manages WebRTC peer connections (multiple simultaneous connections)
    - Handles media stream acquisition and track management
    - Processes signaling data (offers, answers, ICE candidates)
+   - Supports one-to-many broadcasting model
 
 5. **WebSocket Communication Service (`websocketService.js`)**
    - Manages WebSocket connection establishment and maintenance
    - Implements reconnection logic with exponential backoff
    - Handles message serialization and transmission
+   - Provides connection status updates
 
 6. **Video Visualization Service (`videoVisualizationService.js`)**
    - Centralizes and unifies the state and control of video and canvas visualization
@@ -79,6 +86,7 @@ This service-oriented architecture improves:
    - Background blur toggle option (for viewers)
    - FPS (Frames Per Second) counter
    - Connection status indicator with visual feedback
+   - Viewer count display for broadcasters
 
 2. **WebRTC Connection Management**
    - `RTCPeerConnection` setup and configuration
@@ -86,12 +94,14 @@ This service-oriented architecture improves:
    - SDP (Session Description Protocol) offer/answer exchange
    - Robust connection retry logic with exponential backoff
    - Connection state management and visualization
+   - Multi-viewer support with connection mapping
 
 3. **Video Processing**
    - Raw webcam feed capture
    - Optional background segmentation and blur using BodyPix
    - Real-time FPS calculation
-   - **Unified video visualization through centralized service**
+   - Unified video visualization through centralized service
+   - Mirror effect for local camera preview
 
 ### State Management
 
@@ -102,18 +112,21 @@ The client application maintains several states:
 - `isSegmentationReady`: Tracks if the BodyPix model is loaded and ready
 - `fps`: Tracks the current frames per second rate of the video
 - `connectionStatus`: Tracks the current WebSocket connection status (connected, connecting, disconnected, error)
-- **`videoStreamActive`**: Tracks if a video stream is currently active and attached
-- **`visualizationMode`**: Controls the current video display mode (raw or processed)
+- `videoStreamActive`: Tracks if a video stream is currently active and attached
+- `visualizationMode`: Controls the current video display mode (raw or processed)
+- `viewerCount`: Tracks number of connected viewers (for broadcaster)
+- `cleanupInProgress`: Prevents multiple simultaneous cleanup operations
 
 ### Process Flow
 
 #### Initialization
 1. The application loads and establishes a WebSocket connection to the signaling server
-   - **Connection status changes to "connecting"**
-   - **WebSocket connection attempts employ retry logic with exponential backoff**
-   - **UI provides visual feedback during connection process**
+   - Connection status changes to "connecting"
+   - WebSocket connection attempts employ retry logic with exponential backoff
+   - UI provides visual feedback during connection process
 2. The BodyPix ML model is loaded asynchronously in the background
-3. **Once connected, the status indicator turns green and streaming options become available**
+3. Once connected, the status indicator turns green and streaming options become available
+4. Each client receives a unique UUID from the server for identification
 
 #### When Broadcasting
 1. User clicks "Start Broadcasting"
@@ -125,6 +138,7 @@ The client application maintains several states:
 7. Broadcaster creates an SDP offer and sends it to the viewer
 8. ICE candidates are gathered and exchanged
 9. Once connection is established, video streaming begins
+10. UI updates to show current viewer count
 
 #### When Viewing
 1. User clicks "Start Viewing"
@@ -139,51 +153,78 @@ The client application maintains several states:
 
 #### Background Blur Processing
 1. When background blur is enabled, the segmentation loop is started
-2. **The videoVisualization service switches display mode from raw video to processed canvas**
+2. The videoVisualization service switches display mode from raw video to processed canvas
 3. For each video frame:
    - The BodyPix model segments the person from the background
    - The original frame is drawn to a canvas
    - A blurred version of the frame is created
    - A composite frame is created, with the person from the original frame and the background from the blurred frame
    - The composite frame is displayed on the canvas
-4. **When disabled, the visualization service switches back to raw video display**
+4. When disabled, the visualization service switches back to raw video display
 
 ## Server-Side Operation
 
 ### Components
 
 1. **Express HTTP Server**
-   - Serves static files
+   - Serves static files for the client application
    - Hosts the WebSocket server
+   - Provides status endpoint for healthchecks
 
 2. **WebSocket Server**
-   - Maintains client connections
-   - Tracks the broadcaster
-   - Relays signaling messages
+   - Maintains client connections with unique IDs (UUID v4)
+   - Tracks broadcaster and viewers
+   - Relays signaling messages between appropriate peers
+   - Manages viewer count and broadcasts updates
+   - Handles graceful disconnections
 
 ### Client Tracking
 
-- Each connected client is assigned a unique UUID
-- Clients are stored in a Map with their UUID as the key
+- Each connected client is assigned a unique UUID via the uuid package
+- Clients are stored in a Map with their UUID as the key (`clients` Map)
+- Viewers are tracked in a separate Set (`viewers` Set)
 - The broadcaster is tracked with a special variable
+- Viewer count is broadcast to all relevant clients when it changes
 
 ### Message Handling
 
 The server processes several types of WebSocket messages:
 
 1. **`broadcaster`**: Designates the sender as the broadcaster
-2. **`viewer`**: Notifies the broadcaster that a viewer wants to connect
-3. **`offer`**: Relays the SDP offer from broadcaster to viewer
+   - Stores the client as the broadcaster
+   - Notifies the broadcaster of existing viewers
+   - Broadcasts viewer count
+
+2. **`viewer`**: Registers a client as a viewer
+   - Adds client to viewers set
+   - Notifies broadcaster of new viewer
+   - Updates and broadcasts viewer count
+
+3. **`offer`**: Relays the SDP offer from broadcaster to specific viewer
+   - Forwards offer with sender information
+
 4. **`answer`**: Relays the SDP answer from viewer to broadcaster
+   - Forwards answer with sender information
+
 5. **`candidate`**: Relays ICE candidates between peers
-6. **`stop`**: Notifies affected clients when a stream ends
+   - Forwards candidate with sender information to specific target
 
-### Disconnect Handling
+6. **`stop`**: Handles stream termination
+   - From broadcaster: Notifies all viewers, clears viewer list
+   - From viewer: Updates viewer count, notifies broadcaster
 
+7. **`viewer-disconnected`**: Notifies broadcaster when a viewer disconnects
+   - Updates viewer count
+   - Provides information about which viewer disconnected
+
+### Server Readiness and Disconnect Handling
+
+- Server maintains a `serverReady` flag to prevent premature connections
 - When clients disconnect, they are removed from the client map
 - If the broadcaster disconnects, all viewers are notified with a `stop` message
-- **Server maintains a readiness state to prevent premature connections**
-- **Server provides a status endpoint for clients to check availability**
+- Server provides a `/status` endpoint for clients to check availability
+- Viewer disconnections are tracked and reported to the broadcaster
+- Viewer count is maintained accurately through connection lifecycle
 
 ## Signal and Data Flow
 
@@ -222,15 +263,28 @@ The server processes several types of WebSocket messages:
    Broadcaster ───[stop]──→ Server ───[stop]──→ Viewer(s)
    ```
 
+7. **Viewer Count Updates**
+   ```
+   Server ───[viewer-count, count]──→ Broadcaster
+   Server ───[viewer-count, count]──→ Viewers
+   ```
+
+8. **Viewer Disconnection**
+   ```
+   Server ───[viewer-disconnected, viewerId]──→ Broadcaster
+   ```
+
 ### Media Flow (WebRTC)
 
-After the signaling process completes, a direct peer-to-peer connection is established:
+After the signaling process completes, direct peer-to-peer connections are established:
 
 ```
-Broadcaster ───[Video Stream]───→ Viewer
+Broadcaster ───[Video Stream]───→ Viewer 1
+Broadcaster ───[Video Stream]───→ Viewer 2
+Broadcaster ───[Video Stream]───→ Viewer n
 ```
 
-This direct connection operates outside the server, reducing latency and server load. The media data never passes through the signaling server.
+These direct connections operate outside the server, reducing latency and server load. The media data never passes through the signaling server.
 
 ### Data Processing Pipeline
 
@@ -262,6 +316,14 @@ P2P Stream → videoVisualization service → BodyPix Segmentation → Canvas �
    - Cancellation of animation frames when not in use
    - Proper cleanup of media tracks and connections on stop
    - Memory management through reference cleanup
+   - Prevention of redundant cleanup operations
+   - Efficient handling of multiple peer connections
+
+4. **Video Quality Settings**
+   - Optimized video constraints:
+     - Resolution: 1280x720 (ideal)
+     - Frame rate: 30fps (ideal)
+   - Balanced for quality and performance
 
 ## Integration Improvements
 
@@ -269,21 +331,26 @@ P2P Stream → videoVisualization service → BodyPix Segmentation → Canvas �
    - Centralized video stream management through the videoVisualization service
    - Consistent handling of video elements across different components
    - Improved reliability of video stream display for viewers
+   - Standardized interface for video operations
 
 2. **Enhanced Service Collaboration**
    - Better integration between services through proper dependency injection
    - Clear separation of concerns with video handling isolated in its own service
    - Services now communicate through well-defined interfaces
+   - Reduced inter-service dependencies
 
 3. **Improved User Experience**
    - More reliable background blur toggle functionality
    - Better handling of video stream attachment and display
    - Smoother transitions between video visualization modes
+   - Real-time viewer count updates
+   - Connection status feedback
 
 4. **Code Maintainability**
    - Reduced code duplication for video handling across services
    - Better organized video-related functionality
    - More consistent state management for video elements
+   - Clearer component lifecycle management
 
 ## Connection Reliability Improvements
 
@@ -292,11 +359,13 @@ P2P Stream → videoVisualization service → BodyPix Segmentation → Canvas �
    - Added proper handling of connection state transitions
    - Improved error handling for WebSocket operations
    - Proper component lifecycle management to prevent memory leaks
+   - Efficient reconnection strategy
 
 2. **Server Readiness Protocol**
    - Server indicates when it's fully initialized and ready to accept connections
    - Status endpoint allows clients to check server availability
    - Prevents connection attempts to a server that's not ready
+   - Graceful rejection of premature connections
 
 3. **User Experience Enhancements**
    - Visual connection status indicator with color coding:
@@ -306,11 +375,33 @@ P2P Stream → videoVisualization service → BodyPix Segmentation → Canvas �
      - Purple: Connection error
    - Broadcasting and viewing options automatically disable when not connected
    - Clear feedback during connection attempts and failures
+   - Proper error messages for common failure scenarios
 
 4. **Resource Management**
    - Prevention of redundant cleanup operations
    - Better handling of connection errors without cascading failures
    - Improved synchronization between BodyPix model and connection lifecycle
+   - Proper cleanup of WebRTC peer connections
+
+## Multi-Viewer Support
+
+1. **One-to-Many Broadcasting**
+   - Support for multiple simultaneous viewers
+   - Dynamic peer connection management
+   - Efficient handling of viewer connections and disconnections
+   - Real-time viewer count updates
+
+2. **Connection Management**
+   - Map-based peer connection tracking
+   - Individual offer/answer exchange for each viewer
+   - Proper ICE candidate routing
+   - Efficient cleanup of terminated connections
+
+3. **Viewer Experience**
+   - Individual video processing for each viewer
+   - Background blur can be toggled independently by each viewer
+   - Connection status feedback
+   - Clean disconnection handling
 
 ## Security Considerations
 
@@ -318,14 +409,28 @@ P2P Stream → videoVisualization service → BodyPix Segmentation → Canvas �
 2. The signaling server only relays messages to intended recipients
 3. WebRTC employs encryption for media streams
 4. No authentication or authorization is implemented in this version
+5. Uses STUN servers for NAT traversal:
+   - stun:stun.l.google.com:19302
+   - stun:stun1.l.google.com:19302
 
-## Limitations
+## Limitations and Future Improvements
 
 1. Only supports one broadcaster at a time
-2. No TURN server configuration for NAT traversal
+2. No TURN server configuration for complex NAT traversal scenarios
 3. No fallback for browsers without WebRTC support
 4. Background blur processing can be CPU-intensive
+5. Potential future improvements:
+   - Multiple room support
+   - Authentication and authorization
+   - Audio support
+   - Recording capability
+   - Screen sharing functionality
+   - Mobile responsiveness enhancements
 
 ## Conclusion
 
-This WebRTC application demonstrates a complete implementation of real-time video streaming with optional ML-based video processing. The combination of WebSockets for signaling and WebRTC for media transport creates a scalable and efficient architecture where the server's role is minimized once connections are established. **The improved connection handling ensures a more reliable user experience, with transparent feedback about the application's connection state. The newly added videoVisualization service further enhances reliability by centralizing video stream handling and ensuring proper visualization in all states of the application.**
+This WebRTC application demonstrates a complete implementation of real-time video streaming with optional ML-based video processing. The combination of WebSockets for signaling and WebRTC for media transport creates a scalable and efficient architecture where the server's role is minimized once connections are established. The improved connection handling ensures a more reliable user experience, with transparent feedback about the application's connection state. The videoVisualization service further enhances reliability by centralizing video stream handling and ensuring proper visualization in all states of the application. The multi-viewer support architecture demonstrates WebRTC's capacity for efficient one-to-many broadcasting scenarios.
+
+## Last Updated
+
+April 27, 2025
