@@ -2,7 +2,7 @@
 
 ## Overview
 
-This application is a real-time video streaming platform built with WebRTC, React, and TensorFlow.js. It enables peer-to-peer video broadcasting with an optional background blur effect using the BodyPix machine learning model. The system consists of a client application (React) and a signaling server (Node.js) that facilitates WebRTC connection establishment.
+This application is a real-time video streaming platform built with WebRTC, React, and TensorFlow.js. It enables peer-to-peer video broadcasting with an optional background blur effect using the BodyPix machine learning model. The system also includes in-stream text chat and file sharing through WebRTC data channels. The system consists of a client application (React) and a signaling server (Node.js) that facilitates WebRTC connection establishment.
 
 ## System Architecture
 
@@ -12,6 +12,7 @@ This application is a real-time video streaming platform built with WebRTC, Reac
    - Handles user media capture (webcam)
    - Establishes WebRTC peer connections
    - Processes video streams with TensorFlow.js BodyPix for background blur
+   - Implements real-time text chat and file sharing via WebRTC data channels
    - Manages UI states for broadcasting and viewing
    - Implements a modular architecture with specialized service modules
 
@@ -27,7 +28,7 @@ This application is a real-time video streaming platform built with WebRTC, Reac
 - **Frontend**: React (v19.1.0), WebRTC API
 - **Backend**: Node.js, Express (v5.1.0), WebSocket (ws v8.18.1)
 - **Machine Learning**: TensorFlow.js, BodyPix model (v2.2.1)
-- **Communication**: WebSockets for signaling, WebRTC for media streaming
+- **Communication**: WebSockets for signaling, WebRTC for media streaming and data channels
 - **Development**: Modern JavaScript (ES6+), React Hooks
 
 ## Client-Side Architecture
@@ -72,6 +73,13 @@ The client application follows a modular, service-based architecture that separa
    - Ensures proper display of video streams received through WebRTC
    - Provides a consistent interface for other services to interact with visual elements
 
+7. **Data Channel Service (`dataChannelService.js`)**
+   - Manages WebRTC data channels for real-time communication
+   - Handles text messaging between connected peers
+   - Implements file sharing with chunking for large files
+   - Tracks file transfer progress and status
+   - Maintains message history and provides chat interface utilities
+
 This service-oriented architecture improves:
 - **Maintainability**: Each service has a clearly defined responsibility
 - **Testability**: Services can be tested in isolation
@@ -103,6 +111,13 @@ This service-oriented architecture improves:
    - Unified video visualization through centralized service
    - Mirror effect for local camera preview
 
+4. **Chat Component**
+   - Collapsible chat interface that appears during active connections
+   - Real-time message display with different styling for sent/received messages
+   - Support for file sharing with progress indicators
+   - Username customization for chat participants
+   - System notifications for connection events and file transfers
+
 ### State Management
 
 The client application maintains several states:
@@ -116,6 +131,9 @@ The client application maintains several states:
 - `visualizationMode`: Controls the current video display mode (raw or processed)
 - `viewerCount`: Tracks number of connected viewers (for broadcaster)
 - `cleanupInProgress`: Prevents multiple simultaneous cleanup operations
+- `username`: Displays the user's chosen display name for chat messages
+- `messages`: Chat message history between connected peers
+- `fileTransfers`: Current and past file transfer statuses and progress
 
 ### Process Flow
 
@@ -161,6 +179,21 @@ The client application maintains several states:
    - A composite frame is created, with the person from the original frame and the background from the blurred frame
    - The composite frame is displayed on the canvas
 4. When disabled, the visualization service switches back to raw video display
+
+### Media and Data Flow (WebRTC)
+
+After the signaling process completes, direct peer-to-peer connections are established:
+
+```
+Broadcaster ───[Video Stream]───→ Viewer 1
+Broadcaster ←──[Data Channel]───→ Viewer 1
+Broadcaster ───[Video Stream]───→ Viewer 2
+Broadcaster ←──[Data Channel]───→ Viewer 2
+Broadcaster ───[Video Stream]───→ Viewer n
+Broadcaster ←──[Data Channel]───→ Viewer n
+```
+
+These direct connections operate outside the server, reducing latency and server load. Neither media data nor chat messages pass through the signaling server.
 
 ## Server-Side Operation
 
@@ -298,6 +331,97 @@ For viewing with background blur:
 P2P Stream → videoVisualization service → BodyPix Segmentation → Canvas → Display
 ```
 
+For chat and file sharing:
+```
+P2P Data Channel → dataChannelService → Chat UI → Display
+```
+
+## WebRTC Data Channel Chat
+
+### Features
+
+1. **Real-Time Text Messaging**
+   - Direct peer-to-peer communication through WebRTC data channels
+   - Instant message delivery without server involvement
+   - User identification with customizable display names
+   - Message history with timestamps
+   - Different styling for sent and received messages
+
+2. **File Sharing**
+   - Direct peer-to-peer file transfers
+   - Progress tracking for both sender and receiver
+   - File size limit (5MB) to prevent channel saturation
+   - Automatic file reassembly on the receiving end
+   - Support for all file types
+
+3. **User Experience**
+   - Collapsible chat UI that doesn't interfere with video
+   - Automatic scrolling to latest messages
+   - System notifications for connections, disconnections, and file transfers
+   - Error handling with user-friendly notifications
+
+### Implementation
+
+1. **Data Channel Establishment**
+   - Data channels are automatically created alongside video connections
+   - Uses ordered and reliable channel configuration
+   - Channel state is managed through the dataChannelService
+
+2. **Message Handling**
+   - Text messages are JSON-serialized with metadata (sender, timestamp)
+   - Binary data handling for file transfers
+   - Chunked file transfers to accommodate WebRTC's message size limitations
+   - Message types: chat, system, error, file-info, file
+
+3. **File Transfer Process**
+   - Sender sends file metadata (name, size, ID) to receiver
+   - File is split into manageable chunks (16KB)
+   - Each chunk is prefixed with the file ID
+   - Receiver reassembles chunks using the file ID
+   - Progress is tracked and displayed to both parties
+   - Completed files are made available for download
+
+### Chat UI Components
+
+1. **Message Display**
+   - Real-time message list with scroll functionality
+   - Different styling for sent, received, system, and error messages
+   - Timestamp display for all messages
+   - Sender identification for received messages
+
+2. **Input Controls**
+   - Text input field for messages
+   - Send button for text messages
+   - File attachment button with size validation
+   - File sending controls with cancel option
+
+3. **File Transfer Display**
+   - Progress bars for active transfers
+   - Status indicators (sending, receiving, completed, failed)
+   - Download links for completed transfers
+   - File size information
+
+### Benefits
+
+1. **No Server Load**
+   - All chat communication happens directly between peers
+   - Server is not involved after initial connection setup
+   - Reduces bandwidth costs and server processing
+
+2. **Enhanced Privacy**
+   - End-to-end communication without intermediaries
+   - Files never pass through the server
+   - Communication ceases when connection ends
+
+3. **Low Latency**
+   - Direct peer-to-peer communication reduces delay
+   - Ideal for real-time collaboration during broadcasts
+   - Immediate file transfer without server upload/download cycle
+
+4. **Offline Capability**
+   - Communication can continue even if the signaling server goes offline
+   - Only requires the WebRTC connection to remain established
+
 ## Performance Considerations
 
 1. **BodyPix Model Configuration**
@@ -426,11 +550,22 @@ P2P Stream → videoVisualization service → BodyPix Segmentation → Canvas �
    - Recording capability
    - Screen sharing functionality
    - Mobile responsiveness enhancements
+6. **Data Channel Limitations**
+   - 5MB file size limit for transfers
+   - No message history persistence between sessions
+   - No broadcast chat messages to all viewers simultaneously
+   - No typing indicators or read receipts
+
+7. **Potential future improvements:**
+   - End-to-end encryption for chat messages
+   - Persistent chat history
+   - Group chat capabilities
+   - Increased file size limit with chunking improvements
 
 ## Conclusion
 
-This WebRTC application demonstrates a complete implementation of real-time video streaming with optional ML-based video processing. The combination of WebSockets for signaling and WebRTC for media transport creates a scalable and efficient architecture where the server's role is minimized once connections are established. The improved connection handling ensures a more reliable user experience, with transparent feedback about the application's connection state. The videoVisualization service further enhances reliability by centralizing video stream handling and ensuring proper visualization in all states of the application. The multi-viewer support architecture demonstrates WebRTC's capacity for efficient one-to-many broadcasting scenarios.
+This WebRTC application demonstrates a complete implementation of real-time video streaming with optional ML-based video processing and direct peer-to-peer communication through data channels. The combination of WebSockets for signaling and WebRTC for media transport and data communication creates a scalable and efficient architecture where the server's role is minimized once connections are established. The improved connection handling ensures a more reliable user experience, with transparent feedback about the application's connection state. The videoVisualization service further enhances reliability by centralizing video stream handling and ensuring proper visualization in all states of the application. The multi-viewer support architecture demonstrates WebRTC's capacity for efficient one-to-many broadcasting scenarios, while the data channel implementation showcases WebRTC's ability to provide comprehensive communication capabilities.
 
 ## Last Updated
 
-April 27, 2025
+May 1, 2025
