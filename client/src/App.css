@@ -128,7 +128,8 @@
   background-color: #9C27B0; /* Purple */
 }
 
-/* Fix for mirrored video in viewing mode */
-.viewing-mode #video {
-  transform: scaleX(-1); /* Flip the video horizontally */
+/* Fix for mirrored video and canvas in viewing mode */
+.viewing-mode #video,
+.viewing-mode #canvas {
+  transform: scaleX(-1); /* Flip both video and canvas horizontally */
 }

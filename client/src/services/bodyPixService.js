@@ -65,6 +65,22 @@ export const useBodyPixSegmentation = (setIsSegmentationReady, videoVisualizatio
   }, [setIsSegmentationReady]);
 
   /**
+   * Determines if an element is being mirrored via CSS
+   * @param {HTMLElement} element - HTML element to check
+   * @returns {boolean} - Whether the element is mirrored
+   */
+  const isElementMirrored = (element) => {
+    if (!element) return false;
+    
+    // Check applied styles, including from CSS classes
+    const computedStyle = window.getComputedStyle(element);
+    const transform = computedStyle.transform || computedStyle.webkitTransform;
+    
+    // Check for scaleX(-1) in the computed transform
+    return transform.includes('matrix(-1') || transform.includes('scaleX(-1)');
+  };
+
+  /**
    * Segmentation loop for processing video frames with BodyPix
    */
   const segmentationLoop = useCallback(() => {
@@ -85,9 +101,13 @@ export const useBodyPixSegmentation = (setIsSegmentationReady, videoVisualizatio
 
     const processSegmentation = async () => {
       try {
+        // Check if video is mirrored via CSS
+        const shouldMirror = isElementMirrored(videoRef.current);
+        
         // Segment the person from the video
+        // Note: We don't use flipHorizontal here as we'll handle mirroring at the drawing stage
         const segmentation = await bodyPixModelRef.current.segmentPerson(videoRef.current, {
-          flipHorizontal: false,
+          flipHorizontal: false, // Don't flip during segmentation
           internalResolution: 'medium',
           segmentationThreshold: 0.7
         });
@@ -102,25 +122,48 @@ export const useBodyPixSegmentation = (setIsSegmentationReady, videoVisualizatio
           canvasRef.current.height = videoHeight;
         }
 
-        // Draw original video to canvas first
-        ctx.drawImage(videoRef.current, 0, 0, videoWidth, videoHeight);
+        // Clear the canvas first
+        ctx.clearRect(0, 0, videoWidth, videoHeight);
         
-        // Get the original frame as ImageData
-        const originalFrame = ctx.getImageData(0, 0, videoWidth, videoHeight);
-        
-        // Create a blurred version using a temporary canvas
+        // Create a temporary canvas for our blurred background
         const tempCanvas = document.createElement('canvas');
         tempCanvas.width = videoWidth;
         tempCanvas.height = videoHeight;
         const tempCtx = tempCanvas.getContext('2d');
-        tempCtx.drawImage(videoRef.current, 0, 0, videoWidth, videoHeight);
+        
+        // Draw and blur on the temp canvas first
+        if (shouldMirror) {
+          tempCtx.save();
+          tempCtx.scale(-1, 1);
+          tempCtx.translate(-videoWidth, 0);
+          tempCtx.drawImage(videoRef.current, 0, 0, videoWidth, videoHeight);
+          tempCtx.restore();
+        } else {
+          tempCtx.drawImage(videoRef.current, 0, 0, videoWidth, videoHeight);
+        }
+        
+        // Apply blur effect
         tempCtx.filter = 'blur(8px)';
         tempCtx.drawImage(tempCanvas, 0, 0, videoWidth, videoHeight);
         
         // Get the blurred frame
         const blurredFrame = tempCtx.getImageData(0, 0, videoWidth, videoHeight);
         
-        // Create final composite frame
+        // Now draw the original frame to our main canvas with correct mirroring if needed
+        if (shouldMirror) {
+          ctx.save();
+          ctx.scale(-1, 1);
+          ctx.translate(-videoWidth, 0);
+          ctx.drawImage(videoRef.current, 0, 0, videoWidth, videoHeight);
+          ctx.restore();
+        } else {
+          ctx.drawImage(videoRef.current, 0, 0, videoWidth, videoHeight);
+        }
+        
+        // Get the original frame
+        const originalFrame = ctx.getImageData(0, 0, videoWidth, videoHeight);
+        
+        // Create the composite frame
         const compositeFrame = new ImageData(
           new Uint8ClampedArray(originalFrame.data),
           videoWidth,
@@ -155,22 +198,16 @@ export const useBodyPixSegmentation = (setIsSegmentationReady, videoVisualizatio
 
   /**
    * Start the background blur processing
-   * @param {React.RefObject} [legacyVideoRef] - Optional video ref for legacy support
-   * @param {React.RefObject} [legacyCanvasRef] - Optional canvas ref for legacy support
    */
-  const startBackgroundBlur = useCallback((legacyVideoRef, legacyCanvasRef) => {
+  const startBackgroundBlur = useCallback(() => {
     console.log("Starting background blur processing...");
     
     // Use videoVisualization service if available
     if (videoVisualization) {
       // Switch to blur visualization mode
       videoVisualization.setVisualizationMode('blur');
-    } else if (legacyVideoRef && legacyCanvasRef) {
-      // Legacy way - direct DOM manipulation
-      if (legacyVideoRef.current && legacyCanvasRef.current) {
-        legacyVideoRef.current.classList.add('hidden');
-        legacyCanvasRef.current.classList.remove('hidden');
-      }
+    } else {
+      console.error("No videoVisualization service available");
     }
 
     // Start the segmentation loop
@@ -182,10 +219,8 @@ export const useBodyPixSegmentation = (setIsSegmentationReady, videoVisualizatio
 
   /**
    * Stop the background blur processing
-   * @param {React.RefObject} [legacyVideoRef] - Optional video ref for legacy support
-   * @param {React.RefObject} [legacyCanvasRef] - Optional canvas ref for legacy support
    */
-  const stopBackgroundBlur = useCallback((legacyVideoRef, legacyCanvasRef) => {
+  const stopBackgroundBlur = useCallback(() => {
     console.log("Stopping background blur processing...");
     
     // Stop the segmentation loop if running
@@ -198,18 +233,6 @@ export const useBodyPixSegmentation = (setIsSegmentationReady, videoVisualizatio
     if (videoVisualization) {
       // Switch back to raw video visualization mode
       videoVisualization.setVisualizationMode('raw');
-    } else if (legacyVideoRef && legacyCanvasRef) {
-      // Legacy way - direct DOM manipulation
-      if (legacyVideoRef.current && legacyCanvasRef.current) {
-        legacyVideoRef.current.classList.remove('hidden');
-        legacyCanvasRef.current.classList.add('hidden');
-        
-        // Clear canvas when hidden
-        const canvasCtx = legacyCanvasRef.current.getContext('2d');
-        if (canvasCtx) {
-          canvasCtx.clearRect(0, 0, legacyCanvasRef.current.width, legacyCanvasRef.current.height);
-        }
-      }
     }
   }, [videoVisualization]);
 

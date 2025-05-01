@@ -61,8 +61,18 @@ export const useVideoVisualization = () => {
       // Configure mirror effect for local streams
       if (isLocalStream) {
         videoRef.current.style.transform = 'scaleX(-1)';
+        
+        // Also apply the same transform to canvas for consistency
+        if (canvasRef.current) {
+          canvasRef.current.style.transform = 'scaleX(-1)';
+        }
       } else {
         videoRef.current.style.transform = '';
+        
+        // Also reset canvas transform
+        if (canvasRef.current) {
+          canvasRef.current.style.transform = '';
+        }
       }
       
       console.log(`${isLocalStream ? 'Local' : 'Remote'} video stream attached successfully`);
@@ -85,6 +95,10 @@ export const useVideoVisualization = () => {
     if (videoWidth && videoHeight) {
       canvasRef.current.width = videoWidth;
       canvasRef.current.height = videoHeight;
+      
+      // Ensure canvas has the same transform as video for consistent orientation
+      canvasRef.current.style.transform = videoRef.current.style.transform;
+      
       console.log(`Canvas dimensions set to match video: ${videoWidth}x${videoHeight}`);
     } else {
       console.warn("Video dimensions not available yet");
@@ -112,6 +126,10 @@ export const useVideoVisualization = () => {
       // This just handles the visibility of elements
       videoRef.current.classList.add('hidden');
       canvasRef.current.classList.remove('hidden');
+      
+      // Ensure canvas has the same transform as video
+      canvasRef.current.style.transform = videoRef.current.style.transform;
+      
       console.log("Visualization mode set to processed canvas (blur)");
     }
   }, []);
@@ -138,6 +156,16 @@ export const useVideoVisualization = () => {
     tempCanvas.height = videoHeight;
     
     const ctx = tempCanvas.getContext('2d');
+    
+    // Check if video is mirrored and apply the same transform to the context
+    const isVideoMirrored = videoRef.current.style.transform && 
+                           videoRef.current.style.transform.includes('scaleX(-1)');
+                           
+    if (isVideoMirrored) {
+      ctx.scale(-1, 1);
+      ctx.translate(-videoWidth, 0);
+    }
+    
     ctx.drawImage(videoRef.current, 0, 0, videoWidth, videoHeight);
     
     return ctx.getImageData(0, 0, videoWidth, videoHeight);
@@ -175,6 +203,7 @@ export const useVideoVisualization = () => {
       if (ctx) {
         ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
       }
+      canvasRef.current.style.transform = '';
     }
     
     videoStreamActiveRef.current = false;
