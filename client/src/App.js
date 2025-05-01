@@ -1,16 +1,21 @@
-import React, { useRef, useEffect, useCallback, useMemo } from 'react';
+import React, { useRef, useEffect, useCallback, useMemo, useState } from 'react';
 import useUIState from './services/uiStateService';
 import useFPSMonitor from './services/fpsMonitorService';
 import useBodyPixSegmentation from './services/bodyPixService';
 import useWebRTCConnection from './services/webrtcService';
 import useWebSocketCommunication from './services/websocketService';
 import { useVideoVisualization } from './services/videoVisualizationService';
+import useDataChannel from './services/dataChannelService';
+import ChatComponent from './components/ChatComponent';
 import './App.css';
 
 function App() {
   // Refs for DOM elements
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
+  
+  // User display name for chat
+  const [username, setUsername] = useState(`User-${Math.floor(Math.random() * 1000)}`);
 
   // Initialize the Video Visualization Service
   const videoVisualization = useVideoVisualization();
@@ -59,6 +64,9 @@ function App() {
     initializeWebSocketConnection
   } = useWebSocketCommunication(setConnectionStatus, cleanupInProgressRef);
 
+  // Use the DataChannel Service for chat functionality
+  const dataChannelService = useDataChannel();
+
   // Create a refs object to pass to services using useMemo to prevent recreation on every render
   const refs = useMemo(() => ({
     videoRef,
@@ -105,7 +113,7 @@ function App() {
     };
   }, [setPeerId]);
 
-  // Use the WebRTC Connection Service with videoVisualization
+  // Use the WebRTC Connection Service with videoVisualization and dataChannelService
   const {
     peerConnectionsRef, // Now using map of connections instead of single pcRef
     localStreamRef,
@@ -118,7 +126,7 @@ function App() {
     handleViewerDisconnected, // New function to handle viewer disconnection
     updateViewerCount, // New function to update viewer count
     cleanupConnection
-  } = useWebRTCConnection(sendMessage, fpsStateRef, startMonitoring, videoVisualization);
+  } = useWebRTCConnection(sendMessage, fpsStateRef, startMonitoring, videoVisualization, dataChannelService);
 
   // Update refs object with WebRTC refs
   refs.peerConnectionsRef = peerConnectionsRef;
@@ -249,6 +257,11 @@ function App() {
     });
   }, [toggleBlur, startBackgroundBlur, stopBackgroundBlur, resetFPSCount]);
 
+  // Handle username change
+  const handleUsernameChange = useCallback((e) => {
+    setUsername(e.target.value);
+  }, []);
+
   // --- Render ---
   return (
     <div className="App">
@@ -262,6 +275,19 @@ function App() {
           {connectionStatus === 'disconnected' && 'Disconnected from server'}
           {connectionStatus === 'error' && 'Connection error'}
         </span>
+      </div>
+      
+      {/* Username input */}
+      <div className="username-container">
+        <label htmlFor="username">Your Name: </label>
+        <input
+          type="text"
+          id="username"
+          value={username}
+          onChange={handleUsernameChange}
+          placeholder="Enter your name"
+          disabled={isBroadcasting || isViewing}
+        />
       </div>
       
       <div className="controls">
@@ -300,6 +326,17 @@ function App() {
         <canvas ref={canvasRef} id="canvas" className="hidden"></canvas>
       </div>
       <div id="fps-display">FPS: {fps}</div>
+      
+      {/* Chat Component */}
+      {(isBroadcasting || isViewing) && (
+        <ChatComponent
+          messages={dataChannelService.messages}
+          dataChannelService={dataChannelService}
+          isActive={isBroadcasting || isViewing}
+          peerId={isBroadcasting ? null : fpsStateRef.current.myId}
+          username={username}
+        />
+      )}
     </div>
   );
 }

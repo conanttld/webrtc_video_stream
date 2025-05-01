@@ -3,9 +3,9 @@ import { useCallback, useRef, useState } from 'react';
 /**
  * WebRTC Peer Connection Service
  * Handles WebRTC peer connection setup, track management, and connection state
- * Updated to support one broadcaster with multiple viewers
+ * Updated to support one broadcaster with multiple viewers and data channels for chat
  */
-export const useWebRTCConnection = (sendMessage, fpsStateRef, startMonitoring, videoVisualization) => {
+export const useWebRTCConnection = (sendMessage, fpsStateRef, startMonitoring, videoVisualization, dataChannelService) => {
   // Replace single pcRef with a map for multiple connections
   const peerConnectionsRef = useRef(new Map()); // viewerId => RTCPeerConnection
   const localStreamRef = useRef(null);
@@ -101,6 +101,12 @@ export const useWebRTCConnection = (sendMessage, fpsStateRef, startMonitoring, v
     });
     peerConnectionsRef.current.set(connectionId, pc);
 
+    // Create data channel if the service is available
+    if (dataChannelService && typeof dataChannelService.createDataChannel === 'function') {
+      console.log(`Setting up data channel for ${connectionId}`);
+      dataChannelService.createDataChannel(pc, connectionId, isBroadcaster);
+    }
+
     pc.onicecandidate = ({ candidate }) => {
       if (candidate) {
         const targetId = isBroadcaster ? viewerId : fpsStateRef.current.myId;
@@ -184,7 +190,7 @@ export const useWebRTCConnection = (sendMessage, fpsStateRef, startMonitoring, v
     }
 
     return pc;
-  }, [sendMessage, fpsStateRef, startMonitoring, videoVisualization, setupBroadcasterMedia]);
+  }, [sendMessage, fpsStateRef, startMonitoring, videoVisualization, setupBroadcasterMedia, dataChannelService]);
 
   /**
    * Creates and sends an offer to a specific viewer
@@ -420,6 +426,7 @@ export const useWebRTCConnection = (sendMessage, fpsStateRef, startMonitoring, v
         pc.onicecandidate = null;
         pc.ontrack = null;
         pc.onconnectionstatechange = null;
+        pc.ondatachannel = null; // Add cleanup for data channel handler
         
         // Explicitly close the connection
         try {
@@ -445,7 +452,12 @@ export const useWebRTCConnection = (sendMessage, fpsStateRef, startMonitoring, v
     if (videoVisualization) {
       videoVisualization.clearVisualization();
     }
-  }, [videoVisualization]);
+    
+    // Clean up data channels if the service is available
+    if (dataChannelService && typeof dataChannelService.cleanupDataChannels === 'function') {
+      dataChannelService.cleanupDataChannels();
+    }
+  }, [videoVisualization, dataChannelService]);
 
   return {
     peerConnectionsRef, // Export peerConnectionsRef instead of pcRef

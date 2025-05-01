@@ -1,0 +1,286 @@
+.chat-container {
+  position: absolute;
+  bottom: 0;
+  right: 20px;
+  width: 300px;
+  background-color: #fff;
+  border-radius: 8px 8px 0 0;
+  box-shadow: 0 0 10px rgba(0, 0, 0, 0.2);
+  display: flex;
+  flex-direction: column;
+  z-index: 1000;
+  transition: height 0.3s ease;
+  max-height: 500px;
+}
+
+.chat-container.expanded {
+  height: 400px;
+}
+
+.chat-container.collapsed {
+  height: 40px;
+}
+
+.chat-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 15px;
+  background-color: #2a7fff;
+  color: white;
+  font-weight: bold;
+  cursor: pointer;
+  border-radius: 8px 8px 0 0;
+}
+
+.toggle-btn {
+  background: none;
+  border: none;
+  color: white;
+  font-size: 16px;
+  cursor: pointer;
+}
+
+.messages-container {
+  flex-grow: 1;
+  overflow-y: auto;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: calc(100% - 100px);
+}
+
+.chat-message {
+  display: flex;
+  flex-direction: column;
+  max-width: 80%;
+  word-wrap: break-word;
+}
+
+.chat-message.sent {
+  align-self: flex-end;
+}
+
+.chat-message.received {
+  align-self: flex-start;
+}
+
+.chat-message.system, 
+.chat-message.error {
+  align-self: center;
+  max-width: 90%;
+}
+
+.sender-name {
+  font-size: 0.8em;
+  font-weight: bold;
+  margin-bottom: 2px;
+}
+
+.message-content {
+  padding: 8px 12px;
+  border-radius: 16px;
+  position: relative;
+}
+
+.sent .message-content {
+  background-color: #dcf8c6;
+  border-top-right-radius: 4px;
+}
+
+.received .message-content {
+  background-color: #f1f0f0;
+  border-top-left-radius: 4px;
+}
+
+.system .message-content {
+  background-color: #e1f5fe;
+  border-radius: 8px;
+  font-style: italic;
+  font-size: 0.9em;
+}
+
+.error .message-content {
+  background-color: #ffebee;
+  border-radius: 8px;
+  font-style: italic;
+  color: #d32f2f;
+  font-size: 0.9em;
+}
+
+.message-text {
+  margin-bottom: 4px;
+}
+
+.message-time {
+  font-size: 0.7em;
+  color: #888;
+  text-align: right;
+}
+
+.chat-controls {
+  padding: 10px;
+  border-top: 1px solid #eee;
+}
+
+.input-area {
+  display: flex;
+  gap: 8px;
+}
+
+.message-input {
+  flex-grow: 1;
+  padding: 8px 12px;
+  border: 1px solid #ccc;
+  border-radius: 16px;
+  outline: none;
+}
+
+.send-btn {
+  background-color: #2a7fff;
+  color: white;
+  border: none;
+  border-radius: 16px;
+  padding: 0 15px;
+  cursor: pointer;
+}
+
+.send-btn:disabled {
+  background-color: #ccc;
+  cursor: not-allowed;
+}
+
+.file-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: #f1f0f0;
+  border-radius: 50%;
+  width: 36px;
+  height: 36px;
+  cursor: pointer;
+}
+
+.file-btn[disabled] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.selected-file {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background-color: #f1f0f0;
+  padding: 8px;
+  border-radius: 8px;
+}
+
+.file-name {
+  flex-grow: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 0.9em;
+}
+
+.send-file-btn, .cancel-file-btn {
+  padding: 6px 10px;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.send-file-btn {
+  background-color: #2a7fff;
+  color: white;
+}
+
+.cancel-file-btn {
+  background-color: #f1f0f0;
+}
+
+.no-messages {
+  text-align: center;
+  color: #888;
+  margin: 20px 0;
+  font-style: italic;
+}
+
+.file-message {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.file-icon {
+  font-size: 1.2em;
+}
+
+.file-link {
+  color: #2a7fff;
+  text-decoration: none;
+}
+
+.file-link:hover {
+  text-decoration: underline;
+}
+
+.file-transfers {
+  padding: 10px;
+  border-top: 1px solid #eee;
+  max-height: 100px;
+  overflow-y: auto;
+}
+
+.file-transfers h4 {
+  margin-top: 0;
+  margin-bottom: 8px;
+  font-size: 0.9em;
+}
+
+.file-transfer {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 8px;
+  padding: 8px;
+  border-radius: 4px;
+  background-color: #f9f9f9;
+}
+
+.progress-bar {
+  height: 6px;
+  background-color: #e0e0e0;
+  border-radius: 3px;
+  margin: 4px 0;
+  overflow: hidden;
+}
+
+.progress {
+  height: 100%;
+  background-color: #2a7fff;
+  transition: width 0.3s ease;
+}
+
+.file-transfer.completed .progress {
+  background-color: #4caf50;
+}
+
+.file-transfer.failed .progress, 
+.file-transfer.cancelled .progress {
+  background-color: #f44336;
+}
+
+.status {
+  font-size: 0.8em;
+  color: #666;
+}
+
+.file-transfer.completed .status {
+  color: #4caf50;
+}
+
+.file-transfer.failed .status, 
+.file-transfer.cancelled .status {
+  color: #f44336;
+}
