@@ -142,17 +142,24 @@ export const useUIState = (videoVisualization) => {
   /**
    * Toggle background blur effect
    * @param {boolean} value - New blur state (optional - if not provided, will toggle current state)
+   * @param {Object} services - Object containing services (bodyPixService, fpsMonitor)
    */
-  const toggleBlur = useCallback((value, bodyPixService) => {
+  const toggleBlur = useCallback((value, services) => {
     const newValue = value !== undefined ? value : !applyBlur;
     setApplyBlur(newValue);
     
     // Apply/remove blur effect using provided service
-    if (bodyPixService) {
-      if (newValue) {
-        bodyPixService.startBackgroundBlur();
-      } else {
-        bodyPixService.stopBackgroundBlur();
+    if (services) {
+      // Apply or remove blur based on the new state
+      if (newValue && services.startBackgroundBlur) {
+        services.startBackgroundBlur();
+      } else if (services.stopBackgroundBlur) {
+        services.stopBackgroundBlur();
+      }
+
+      // Reset FPS counter when blur state changes
+      if (services.resetFPSCount) {
+        services.resetFPSCount();
       }
     }
     

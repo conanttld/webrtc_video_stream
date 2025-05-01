@@ -40,7 +40,8 @@ function App() {
     stopMonitoring,
     setPeerId,
     rafRef,
-    fpsStateRef
+    fpsStateRef,
+    resetFPSCount // New function to reset FPS count
   } = useFPSMonitor(setFps);
 
   // Use the BodyPix Segmentation Service with videoVisualization
@@ -241,8 +242,12 @@ function App() {
 
   // Handle blur toggle
   const handleBlurToggle = useCallback((e) => {
-    toggleBlur(e.target.checked, { startBackgroundBlur, stopBackgroundBlur });
-  }, [toggleBlur, startBackgroundBlur, stopBackgroundBlur]);
+    toggleBlur(e.target.checked, { 
+      startBackgroundBlur, 
+      stopBackgroundBlur,
+      resetFPSCount // Pass the resetFPSCount function to reset FPS when blur state changes
+    });
+  }, [toggleBlur, startBackgroundBlur, stopBackgroundBlur, resetFPSCount]);
 
   // --- Render ---
   return (

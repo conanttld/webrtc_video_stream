@@ -42,6 +42,18 @@ export const useFPSMonitor = (setFps) => {
   }, [setFps]);
 
   /**
+   * Reset the FPS counter
+   * Used when visual processing changes (like toggling blur)
+   * to get accurate FPS measurements after the change
+   */
+  const resetFPSCount = useCallback(() => {
+    console.log('Resetting FPS counter due to visual processing change');
+    fpsStateRef.current.frameCount = 0;
+    fpsStateRef.current.lastFrameTime = performance.now();
+    setFps(0); // Reset displayed FPS
+  }, [setFps]);
+
+  /**
    * Starts FPS monitoring
    * @param {boolean} isBroadcaster - Whether the current client is broadcasting
    */
@@ -91,6 +103,7 @@ export const useFPSMonitor = (setFps) => {
     startMonitoring,
     stopMonitoring,
     setPeerId,
+    resetFPSCount,
     rafRef,
     fpsStateRef
   };
